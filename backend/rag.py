@@ -81,4 +81,23 @@ class RAGEngine:
                 "confidence": 0.0
             }
 
+    def answer_general_question(self, query: str, context: str):
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a helpful compliance assistant. 
+            Answer the user's question accurately based ONLY on the provided document context.
+            If the context doesn't contain the answer, say you don't know based on these documents.
+            Always cite the Source/Page number if available in the context.
+            
+            Context:
+            {context}"""),
+            ("user", "{query}")
+        ])
+        
+        chain = prompt | self.llm
+        try:
+            result = chain.invoke({"query": query, "context": context})
+            return result.content
+        except Exception as e:
+            return f"Error answering question: {str(e)}"
+
 rag_engine = RAGEngine()

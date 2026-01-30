@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import ThreeScene from './components/ThreeScene';
 import Sidebar from './components/Sidebar';
+import ChatDialog from './components/ChatDialog';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
@@ -56,6 +57,9 @@ function App() {
           selectedNode={selectedNode}
           loading={loading}
         />
+
+        {/* Chat Dialog */}
+        <ChatDialog />
 
         {!graphData && !loading && (
           <div style={{

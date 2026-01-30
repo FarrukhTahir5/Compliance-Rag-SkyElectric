@@ -1,12 +1,62 @@
-import React, { useRef, useState, useMemo } from 'react';
+import React, { useRef, useState, useMemo, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera, Text, Float, Stars, Line, Html } from '@react-three/drei';
+import { OrbitControls, PerspectiveCamera, Text, Float, Stars, Line, Html, useCursor } from '@react-three/drei';
 import { X, CheckCircle, AlertTriangle, XCircle, Info } from 'lucide-react';
 import * as THREE from 'three';
 
-const Node = ({ position, type, data, onClick, isSelected, onClose }) => {
+const Node = ({ id, position: initialPosition, label, type, data, isSelected, onClick, onPositionChange, onDragStart, onDragEnd }) => {
     const meshRef = useRef();
-    const [hovered, setHover] = useState(false);
+    const [hovered, setHovered] = useState(false);
+    const [position, setPosition] = useState(initialPosition);
+    const [dragging, setDragging] = useState(false);
+    const { camera, mouse } = useThree();
+
+    useCursor(hovered);
+
+    const onPointerDown = (e) => {
+        e.stopPropagation();
+        setDragging(true);
+        onDragStart(); // Signal to ThreeScene to disable OrbitControls
+        onClick();
+        document.body.style.cursor = 'grabbing';
+    };
+
+    const onPointerMove = (e) => {
+        if (!dragging) return;
+        e.stopPropagation();
+
+        // Project mouse position to 3D space at the node's depth
+        const vec = new THREE.Vector3(mouse.x, mouse.y, 0);
+        vec.unproject(camera);
+        const dir = vec.sub(camera.position).normalize();
+        const distance = -camera.position.z / dir.z;
+        const pos = camera.position.clone().add(dir.multiplyScalar(distance));
+
+        const newPos = [pos.x, pos.y, 0];
+        setPosition(newPos);
+        onPositionChange(id, newPos);
+    };
+
+    const onPointerUp = (e) => {
+        setDragging(false);
+        onDragEnd(); // Re-enable OrbitControls
+        document.body.style.cursor = 'auto';
+    };
+
+    useEffect(() => {
+        if (dragging) {
+            window.addEventListener('pointermove', onPointerMove);
+            window.addEventListener('pointerup', onPointerUp);
+        }
+        return () => {
+            window.removeEventListener('pointermove', onPointerMove);
+            window.removeEventListener('pointerup', onPointerUp);
+        };
+    }, [dragging, onPointerMove, onPointerUp]);
+
+    useEffect(() => {
+        setPosition(initialPosition);
+    }, [initialPosition]);
 
     // Color based on status or type
     const color = useMemo(() => {
@@ -16,30 +66,22 @@ const Node = ({ position, type, data, onClick, isSelected, onClose }) => {
         return '#ef4444'; // Red
     }, [type, data]);
 
-    useFrame((state) => {
-        if (meshRef.current) {
-            meshRef.current.rotation.y += 0.01;
-        }
-    });
-
     return (
         <group position={position}>
             <mesh
                 ref={meshRef}
-                onPointerOver={() => setHover(true)}
-                onPointerOut={() => setHover(false)}
-                onClick={(e) => {
-                    e.stopPropagation();
-                    onClick(data);
-                }}
+                onPointerOver={() => setHovered(true)}
+                onPointerOut={() => setHovered(false)}
+                onPointerDown={onPointerDown}
             >
-                <sphereGeometry args={[type === 'regulation' ? 0.3 : 0.2, 32, 32]} />
+                <sphereGeometry args={[type === 'regulation' ? 0.15 : 0.08, 32, 32]} />
                 <meshStandardMaterial
                     color={color}
                     emissive={color}
                     emissiveIntensity={hovered || isSelected ? 2 : 0.5}
                     metalness={0.8}
                     roughness={0.2}
+                    toneMapped={false}
                 />
             </mesh>
 
@@ -57,7 +99,7 @@ const Node = ({ position, type, data, onClick, isSelected, onClose }) => {
                             <span style={{ fontWeight: 'bold' }}>
                                 {type === 'regulation' ? `Regulation ${data.label}` : `Clause ${data.label}`}
                             </span>
-                            <button onClick={(e) => { e.stopPropagation(); onClose(); }} style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer' }}>
+                            <button onClick={(e) => { e.stopPropagation(); onClick(null); }} style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer' }}>
                                 <X size={14} />
                             </button>
                         </div>
@@ -108,93 +150,94 @@ const Connection = ({ start, end, status }) => {
     );
 };
 
-const ThreeScene = ({ graphData, onNodeClick, selectedNode, loading }) => {
-    const nodesMap = useMemo(() => {
-        if (!graphData) return {};
-        const map = {};
-        graphData.nodes.forEach((node, i) => {
-            // Arrange in a galaxy/spiral shape
-            const angle = i * 0.4;
-            const radius = node.type === 'regulation' ? 5 + Math.random() * 2 : 2 + Math.random() * 2;
-            const x = Math.cos(angle) * radius;
-            const z = Math.sin(angle) * radius;
-            const y = (Math.random() - 0.5) * 3;
-            map[node.id] = [x, y, z];
+const ThreeScene = ({ graphData: data, onNodeClick, selectedNode, loading }) => {
+    const [nodePositions, setNodePositions] = useState({});
+    const [isDragging, setIsDragging] = useState(false);
+
+    // Initialize/Update node positions when data changes
+    useEffect(() => {
+        if (!data) return;
+        const initialPositions = {};
+        data.nodes.forEach((node, idx) => {
+            if (node.type === 'regulation') {
+                const angle = (idx / data.nodes.filter(n => n.type === 'regulation').length) * Math.PI * 2;
+                initialPositions[node.id] = [Math.cos(angle) * 2, Math.sin(angle) * 2, 0];
+            } else {
+                initialPositions[node.id] = [(Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, 0];
+            }
         });
-        return map;
-    }, [graphData]);
+        setNodePositions(initialPositions);
+    }, [data]);
+
+    const handlePositionChange = (id, pos) => {
+        setNodePositions(prev => ({ ...prev, [id]: pos }));
+    };
 
     if (loading) {
         return (
-            <Html center>
-                <div style={{ textAlign: 'center', color: 'white', width: '400px' }}>
-                    <div className="spinner" style={{
-                        width: '60px',
-                        height: '60px',
-                        border: '6px solid rgba(255,255,255,0.1)',
-                        borderTopColor: '#6366f1',
-                        borderRadius: '50%',
-                        animation: 'spin 1s linear infinite',
-                        margin: '0 auto 20px'
-                    }} />
-                    <h2 style={{ fontSize: '24px', letterSpacing: '2px', margin: '0 0 10px 0' }}>ANALYZING GALAXY...</h2>
-                    <p style={{ opacity: 0.6 }}>LLM is cross-referencing clauses and computing compliance risk.</p>
-                </div>
-            </Html>
+            <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#0c0c0e' }}>
+                <div className="spinner" style={{ width: '60px', height: '60px', border: '4px solid rgba(255,255,255,0.1)', borderTopColor: '#a855f7', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+                <h2 style={{ marginTop: '24px', letterSpacing: '4px', background: 'linear-gradient(to right, #a855f7, #6366f1)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+                    ANALYZING GALAXY...
+                </h2>
+                <style jsx="true">{`
+                    @keyframes spin { to { transform: rotate(360deg); } }
+                `}</style>
+            </div>
         );
     }
 
-    if (!graphData) return null;
-
     return (
-        <group>
-            <PerspectiveCamera makeDefault position={[0, 5, 12]} fov={50} />
-            <OrbitControls enableDamping dampingFactor={0.05} />
-
+        <Canvas camera={{ position: [0, 0, 5], fov: 60 }}>
+            <color attach="background" args={['#0c0c0e']} />
             <ambientLight intensity={0.5} />
-            <pointLight position={[10, 10, 10]} intensity={1.5} />
-            <spotLight position={[-10, 20, 10]} angle={0.15} penumbra={1} intensity={2} castShadow />
-
+            <pointLight position={[10, 10, 10]} />
             <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
 
-            {graphData.nodes.map((node) => (
+            <OrbitControls
+                enablePan={true}
+                enableZoom={true}
+                makeDefault
+                enabled={!isDragging}
+            />
+
+            {data && Object.keys(nodePositions).length > 0 && data.nodes.map((node) => (
                 <Node
                     key={node.id}
-                    position={nodesMap[node.id]}
+                    id={node.id}
+                    position={nodePositions[node.id]}
+                    label={node.label}
                     type={node.type}
                     data={node}
-                    onClick={onNodeClick}
                     isSelected={selectedNode?.id === node.id}
-                    onClose={() => onNodeClick(null)}
+                    onClick={() => onNodeClick(node)}
+                    onPositionChange={handlePositionChange}
+                    onDragStart={() => setIsDragging(true)}
+                    onDragEnd={() => setIsDragging(false)}
                 />
             ))}
 
-            {graphData.edges.map((edge, i) => (
+            {data && Object.keys(nodePositions).length > 0 && data.edges.map((edge, idx) => (
                 <Connection
-                    key={i}
-                    start={nodesMap[edge.from]}
-                    end={nodesMap[edge.to]}
+                    key={idx}
+                    start={nodePositions[edge.from]}
+                    end={nodePositions[edge.to]}
                     status={edge.status}
                 />
             ))}
-        </group>
+        </Canvas>
     );
 };
 
 const GalaxyViewport = ({ graphData, onNodeClick, selectedNode, loading }) => {
     return (
         <div style={{ width: '100%', height: '100vh', background: 'radial-gradient(circle at center, #1e1e2d 0%, #0c0c0e 100%)' }}>
-            <Canvas shadows dpr={[1, 2]}>
-                <ThreeScene
-                    graphData={graphData}
-                    onNodeClick={onNodeClick}
-                    selectedNode={selectedNode}
-                    loading={loading}
-                />
-            </Canvas>
-            <style jsx="true">{`
-                @keyframes spin { to { transform: rotate(360deg); } }
-            `}</style>
+            <ThreeScene
+                graphData={graphData}
+                onNodeClick={onNodeClick}
+                selectedNode={selectedNode}
+                loading={loading}
+            />
         </div>
     );
 };

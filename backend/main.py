@@ -140,6 +140,23 @@ async def assess_compliance(
     db.commit()
     return {"assessment_id": assessment.id, "results_count": len(results)}
 
+@app.post("/chat")
+async def chat_with_docs(
+    query: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    # Search across all documents for the most relevant context
+    similar_docs = rag_engine.retrieve_similar_clauses(query, top_k=5)
+    
+    if not similar_docs:
+        return {"answer": "I couldn't find any relevant information in your documents."}
+        
+    context = "\n\n".join([f"Source: {d.metadata.get('clause_id')} (Doc ID: {d.metadata.get('doc_id')}, Page: {d.metadata.get('page_number', 'N/A')})\nContent: {d.page_content}" for d, score in similar_docs])
+    
+    # Use LLM to answer the question based on context
+    answer = rag_engine.answer_general_question(query, context)
+    return {"answer": answer}
+
 @app.get("/graph/{assessment_id}")
 def get_graph_data(assessment_id: int, db: Session = Depends(get_db)):
     assessment = db.query(Assessment).get(assessment_id)
