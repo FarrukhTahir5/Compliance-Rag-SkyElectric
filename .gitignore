@@ -1,0 +1,22 @@
+# Environment Variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# Database & Data
+backend/data/*.db
+backend/data/faiss_index/
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+
+# OS files
+.DS_Store
+Thumbs.db
