@@ -112,19 +112,19 @@ const Node = ({ id, position: initialPosition, label, type, data, isSelected, on
                     }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                             <span style={{ fontWeight: 'bold' }}>
-                                {type === 'regulation' ? `Regulation ${data.label}` : `Clause ${data.label}`}
+                                {type === 'regulation' ? `Standard ${data.label}` : `Requirement ${data.label}`}
                             </span>
-                            <button 
-                                onClick={(e) => { 
-                                    e.stopPropagation(); 
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
                                     e.preventDefault();
                                     console.log("X button clicked, calling onClick(null)"); // Debug log
-                                    onClick(null); 
-                                }} 
-                                style={{ 
-                                    background: 'transparent', 
-                                    border: 'none', 
-                                    color: 'white', 
+                                    onClick(null);
+                                }}
+                                style={{
+                                    background: 'transparent',
+                                    border: 'none',
+                                    color: 'white',
                                     cursor: 'pointer',
                                     padding: '4px',
                                     borderRadius: '2px',
@@ -212,8 +212,8 @@ const ThreeScene = ({ graphData: data, onNodeClick, selectedNode, loading }) => 
         return (
             <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#0c0c0e' }}>
                 <div className="spinner" style={{ width: '60px', height: '60px', border: '4px solid rgba(255,255,255,0.1)', borderTopColor: '#a855f7', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
-                <h2 style={{ marginTop: '24px', letterSpacing: '4px', background: 'linear-gradient(to right, #a855f7, #6366f1)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-                    ANALYZING GALAXY...
+                <h2 style={{ marginTop: '24px', letterSpacing: '4px', background: 'linear-gradient(to right, #a855f7, #6366f1)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontWeight: 800 }}>
+                    INSPECTING SKYCOMPLIANCE™...
                 </h2>
                 <style jsx="true">{`
                     @keyframes spin { to { transform: rotate(360deg); } }

@@ -47,8 +47,10 @@ async def upload_file(
             detail=f"Only {', '.join(ALLOWED_EXTENSIONS)} files are supported."
         )
     
+    print(f"DEBUG: Uploading {file.filename} as {file_type}")
     content = await file.read()
     doc_id = parse_document(content, file.filename, file_type, version)
+    print(f"DEBUG: Uploaded {file.filename}, doc_id: {doc_id}")
     return {"doc_id": doc_id, "filename": file.filename}
 
 @app.get("/documents")
@@ -81,6 +83,18 @@ def delete_document(doc_id: int):
     
     return {"message": "Document deleted"}
 
+@app.patch("/documents/{doc_id}/type")
+def update_document_type(doc_id: int, file_type: str = Form(...)):
+    doc = store.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    if file_type not in ["regulation", "customer"]:
+        raise HTTPException(status_code=400, detail="Invalid file type")
+    
+    doc.file_type = file_type
+    return {"message": "Document type updated", "file_type": file_type}
+
 @app.post("/reset")
 def reset_data():
     store.reset()
@@ -92,9 +106,12 @@ async def assess_compliance(
     customer_doc_id: int,
     regulation_doc_id: int,
 ):
+    print(f"DEBUG: Assessing compliance. Customer Doc: {customer_doc_id}, Reg Doc: {regulation_doc_id}")
     customer_clauses = store.get_clauses_by_document(customer_doc_id)
+    print(f"DEBUG: Found {len(customer_clauses)} clauses in customer doc")
     
     if not customer_clauses:
+        print(f"DEBUG: FAILURE - No clauses for customer doc {customer_doc_id}")
         raise HTTPException(status_code=400, detail="No clauses found in customer document")
     
     assessment = store.add_assessment(
@@ -102,25 +119,27 @@ async def assess_compliance(
         regulation_doc_id=regulation_doc_id
     )
     
-    results = []
-    for c_clause in customer_clauses:
+    import asyncio
+    
+    async def process_clause(c_clause):
         # Retrieve similar regulation clauses
         similar_docs = rag_engine.retrieve_similar_clauses(c_clause.text, doc_id=regulation_doc_id)
         
         if not similar_docs:
-            continue
+            print(f"DEBUG: No similarity found for clause {c_clause.clause_id}")
+            return None
             
         best_match_doc, score = similar_docs[0]
         reg_clause_id_val = best_match_doc.metadata['clause_id']
         reg_clause = store.get_clause_by_doc_and_clause_id(regulation_doc_id, reg_clause_id_val)
         
         if not reg_clause:
-            continue
+            return None
             
         # Run LLM Analysis
-        analysis = rag_engine.analyze_compliance(c_clause.text, reg_clause.text)
+        analysis = await rag_engine.analyze_compliance(c_clause.text, reg_clause.text)
         
-        res = store.add_result(
+        return store.add_result(
             assessment_id=assessment.id,
             customer_clause_id=c_clause.id,
             regulation_clause_id=reg_clause.id,
@@ -130,7 +149,10 @@ async def assess_compliance(
             evidence_text=analysis.get('evidence_text', 'N/A'),
             confidence=analysis['confidence']
         )
-        results.append(res)
+
+    # Process all clauses in parallel
+    results_raw = await asyncio.gather(*[process_clause(c) for c in customer_clauses])
+    results = [r for r in results_raw if r is not None]
         
     return {"assessment_id": assessment.id, "results_count": len(results)}
 
@@ -235,15 +257,15 @@ def generate_report(assessment_id: int):
     elements = []
     
     styles = getSampleStyleSheet()
-    elements.append(Paragraph(f"Compliance Assessment Report", styles['Title']))
+    elements.append(Paragraph(f"SkyCompliance™ Engineering Report", styles['Title']))
     elements.append(Spacer(1, 12))
     
     # Header info
     customer_doc = store.get_document(assessment.customer_doc_id)
     reg_doc = store.get_document(assessment.regulation_doc_id)
     
-    elements.append(Paragraph(f"Customer Document: {customer_doc.filename if customer_doc else 'N/A'}", styles['Normal']))
-    elements.append(Paragraph(f"Regulation Document: {reg_doc.filename if reg_doc else 'N/A'}", styles['Normal']))
+    elements.append(Paragraph(f"Project Document: {customer_doc.filename if customer_doc else 'N/A'}", styles['Normal']))
+    elements.append(Paragraph(f"Regulatory Standard: {reg_doc.filename if reg_doc else 'N/A'}", styles['Normal']))
     elements.append(Paragraph(f"Date: {assessment.created_at.strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
     elements.append(Spacer(1, 24))
     

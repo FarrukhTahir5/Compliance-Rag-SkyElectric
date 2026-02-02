@@ -117,23 +117,47 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
         }
     };
 
+    const handleToggleType = async (e, id, currentType) => {
+        e.stopPropagation();
+        const newType = currentType === 'regulation' ? 'customer' : 'regulation';
+
+        // Optimistic update
+        const originalFiles = [...files];
+        setFiles(files.map(f => f.id === id ? { ...f, file_type: newType } : f));
+
+        try {
+            const formData = new FormData();
+            formData.append('file_type', newType);
+            await axios.patch(`${API_BASE}/documents/${id}/type`, formData);
+        } catch (e) {
+            console.error("Failed to update type:", e);
+            setFiles(originalFiles);
+        }
+    };
+
     const runAssessment = async () => {
-        if (selectedDocs.length < 1) {
-            alert("Please upload at least 1 document.");
+        const selectedFiles = files.filter(f => selectedDocs.includes(f.id));
+        const standards = selectedFiles.filter(f => f.file_type === 'regulation');
+        const projects = selectedFiles.filter(f => f.file_type === 'customer');
+
+        if (standards.length === 0 || projects.length === 0) {
+            alert("Analysis requires at least one Regulatory Standard and one Project Document.");
             return;
         }
 
         onStartAnalysis();
 
         try {
-            const selectedFiles = files.filter(f => selectedDocs.includes(f.id));
-            const firstDoc = selectedFiles[0];
-            const secondDoc = selectedFiles.length > 1 ? selectedFiles[1] : firstDoc;
+            const firstDoc = standards[0];
+            const secondDoc = projects[0];
 
-            const res = await axios.post(`${API_BASE}/assess?customer_doc_id=${firstDoc.id}&regulation_doc_id=${secondDoc.id}`);
+            console.log(`Analyzing: Standard=${firstDoc.filename}, Project=${secondDoc.filename}`);
+            const res = await axios.post(`${API_BASE}/assess?customer_doc_id=${secondDoc.id}&regulation_doc_id=${firstDoc.id}`);
             onAssessmentComplete(res.data.assessment_id);
         } catch (e) {
-            alert("Assessment failed.");
+            console.error("Assessment Error:", e);
+            const detail = e.response?.data?.detail || e.message;
+            alert(`Assessment failed: ${detail}`);
             onAssessmentComplete(null);
         }
     };
@@ -150,34 +174,42 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
 
     const isGraphMode = mode === 'graph';
 
+    // Validation for "Analyze" button
+    const selectedFiles = files.filter(f => selectedDocs.includes(f.id));
+    const hasStandard = selectedFiles.some(f => f.file_type === 'regulation');
+    const hasProject = selectedFiles.some(f => f.file_type === 'customer');
+    const canAnalyze = hasStandard && hasProject;
+
     return (
         <div className="glass-panel" style={{ width: '400px', height: '100vh', padding: '24px', flexShrink: 0, overflowY: 'auto', borderRight: '1px solid rgba(255,255,255,0.1)', borderRadius: 0 }}>
-            <h1 style={{ fontSize: '24px', margin: '0 0 24px 0', background: 'linear-gradient(to right, #a855f7, #6366f1)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-                Compliance Galaxy
+            <h1 style={{ fontSize: '26px', fontWeight: 800, margin: '0 0 8px 0', background: 'linear-gradient(to right, #a855f7, #6366f1)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', letterSpacing: '-0.5px' }}>
+                SkyCompliance
             </h1>
+            <p style={{ fontSize: '12px', opacity: 0.5, marginBottom: '24px' }}>Advanced Engineering Intelligence</p>
 
             <section style={{ marginBottom: '32px' }}>
                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', textTransform: 'uppercase', opacity: 0.6 }}>
-                    <Upload size={16} /> {isGraphMode ? "Data Ingestion" : "Documents"}
+                    <Upload size={16} /> {isGraphMode ? "Knowledge Ingestion" : "Cloud Storage"}
                 </h3>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px', marginTop: '12px' }}>
                     <label className="btn-primary" style={{
                         fontSize: '14px',
                         textAlign: 'center',
                         padding: '16px',
-                        background: 'linear-gradient(135deg, #4ecdc4 0%, #45b7d1 100%)',
+                        background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        boxSizing: 'border-box'
+                        boxSizing: 'border-box',
+                        gap: '8px'
                     }}>
-                        {isGraphMode ? "📎 UPLOAD DOCUMENTS (Max 10)" : "UPLOAD NEW DOCUMENT"}
+                        <Upload size={18} />
+                        {isGraphMode ? "UPLOAD SOURCES (Max 10)" : "UPLOAD NEW SOURCE"}
                         <input type="file" hidden accept=".pdf,.docx" multiple={isGraphMode} onChange={(e) => handleUpload(e)} />
                     </label>
                     {isGraphMode && (
-                        <div style={{ fontSize: '10px', opacity: 0.6, textAlign: 'center', marginTop: '8px', padding: '8px', background: 'rgba(78, 205, 196, 0.1)', borderRadius: '6px', border: '1px solid rgba(78, 205, 196, 0.3)' }}>
-                            ✨ Documents are automatically selected for analysis after upload!
-                            <br />Click any document to toggle selection.
+                        <div style={{ fontSize: '10px', opacity: 0.6, textAlign: 'center', marginTop: '8px', padding: '10px', background: 'rgba(99, 102, 241, 0.1)', borderRadius: '6px', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
+                            💡 Toggle each file type to **Standard** (AI Reference) or **Project** (Assessment Target).
                         </div>
                     )}
                 </div>
@@ -185,18 +217,18 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
 
             <section style={{ marginBottom: '32px' }}>
                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', textTransform: 'uppercase', opacity: 0.6 }}>
-                    <Database size={16} /> Knowledge Base
+                    <Database size={16} /> Asset Library
                     {isGraphMode && selectedDocs.length > 0 && (
                         <span style={{
                             marginLeft: 'auto',
-                            background: 'linear-gradient(135deg, #4ecdc4, #45b7d1)',
+                            background: 'linear-gradient(135deg, #6366f1, #a855f7)',
                             color: 'white',
                             padding: '2px 8px',
                             borderRadius: '10px',
                             fontSize: '10px',
                             fontWeight: 'bold'
                         }}>
-                            {selectedDocs.length}/{files.length} SELECTED
+                            {selectedDocs.length} ASSETS
                         </span>
                     )}
                 </h3>
@@ -213,7 +245,7 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                 <FileText size={18} color="#a855f7" className="animate-pulse" />
                                 <div style={{ flex: 1 }}>
-                                    <div style={{ fontSize: '14px', fontWeight: 500 }}>Uploading...</div>
+                                    <div style={{ fontSize: '14px', fontWeight: 500 }}>Ingesting...</div>
                                     <div style={{ fontSize: '11px', opacity: 0.5 }}>{uploadProgress}% completed</div>
                                 </div>
                             </div>
@@ -231,6 +263,7 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
                     {files.map((f, index) => {
                         const color = getFileColor(index);
                         const isSelected = selectedDocs.includes(f.id);
+                        const isReg = f.file_type === 'regulation';
 
                         return (
                             <div
@@ -240,93 +273,100 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
                                     padding: '12px',
                                     borderRadius: '8px',
                                     background: isGraphMode && isSelected
-                                        ? `linear-gradient(135deg, ${color.bg}40, ${color.bg}20)`
-                                        : 'rgba(255,255,255,0.05)',
-                                    border: `2px solid ${isGraphMode && isSelected ? color.border : 'transparent'}`,
+                                        ? 'rgba(255,255,255,0.08)'
+                                        : 'rgba(255,255,255,0.03)',
+                                    border: `1px solid ${isGraphMode && isSelected ? 'rgba(168, 85, 247, 0.4)' : 'transparent'}`,
                                     cursor: isGraphMode ? 'pointer' : 'default',
                                     display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '12px',
+                                    flexDirection: 'column',
+                                    gap: '8px',
                                     position: 'relative',
-                                    transition: 'all 0.2s ease',
-                                    boxShadow: isGraphMode && isSelected ? `0 0 15px ${color.bg}30` : 'none'
+                                    transition: 'all 0.2s ease'
                                 }}
                             >
-                                <div
-                                    style={{
-                                        width: '8px',
-                                        height: '8px',
-                                        borderRadius: '50%',
-                                        background: color.bg,
-                                        boxShadow: `0 0 8px ${color.bg}60`,
-                                        animation: isGraphMode && isSelected ? 'pulse 2s infinite' : 'none'
-                                    }}
-                                />
-                                <FileText size={18} color={isGraphMode && isSelected ? color.border : '#888'} />
-                                <div style={{ overflow: 'hidden', flex: 1 }}>
-                                    <div style={{
-                                        fontSize: '14px',
-                                        fontWeight: isGraphMode && isSelected ? 600 : 500,
-                                        overflow: 'hidden',
-                                        textOverflow: 'ellipsis',
-                                        whiteSpace: 'nowrap',
-                                        color: isGraphMode && isSelected ? color.border : 'inherit'
-                                    }}>
-                                        {f.filename}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <div
+                                        style={{
+                                            width: '8px',
+                                            height: '8px',
+                                            borderRadius: '50%',
+                                            background: isReg ? '#a855f7' : '#10b981',
+                                            boxShadow: `0 0 8px ${isReg ? '#a855f7' : '#10b981'}40`,
+                                        }}
+                                    />
+                                    <FileText size={18} color={isSelected ? '#fff' : '#888'} />
+                                    <div style={{ overflow: 'hidden', flex: 1 }}>
+                                        <div style={{
+                                            fontSize: '14px',
+                                            fontWeight: isSelected ? 600 : 500,
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis',
+                                            whiteSpace: 'nowrap'
+                                        }}>
+                                            {f.filename}
+                                        </div>
                                     </div>
-                                    <div style={{ fontSize: '11px', opacity: 0.5 }}>
-                                        v{f.version} {isGraphMode ? `• ${f.file_type}` : ''}
-                                    </div>
+                                    <button
+                                        onClick={(e) => handleDelete(e, f.id)}
+                                        style={{ background: 'transparent', border: 'none', color: '#ef4444', opacity: 0.3, cursor: 'pointer', padding: '4px' }}
+                                        onMouseEnter={(e) => e.target.style.opacity = 1}
+                                        onMouseLeave={(e) => e.target.style.opacity = 0.3}
+                                    >
+                                        <XCircle size={14} />
+                                    </button>
                                 </div>
-                                {isGraphMode && isSelected && (
-                                    <div style={{
-                                        background: color.bg,
-                                        color: 'white',
-                                        borderRadius: '10px',
-                                        padding: '2px 8px',
-                                        fontSize: '10px',
-                                        fontWeight: 'bold',
-                                        textTransform: 'uppercase'
-                                    }}>
-                                        SELECTED
+
+                                {isGraphMode && (
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px', padding: '4px 8px', background: 'rgba(0,0,0,0.2)', borderRadius: '4px' }}>
+                                        <span style={{ fontSize: '10px', opacity: 0.6, fontWeight: 'bold' }}>
+                                            {isReg ? "⚖️ STANDARD" : "📄 PROJECT"}
+                                        </span>
+                                        <button
+                                            onClick={(e) => handleToggleType(e, f.id, f.file_type)}
+                                            style={{
+                                                fontSize: '9px',
+                                                background: isReg ? 'rgba(168, 85, 247, 0.2)' : 'rgba(16, 185, 129, 0.2)',
+                                                border: `1px solid ${isReg ? '#a855f7' : '#10b981'}`,
+                                                color: 'white',
+                                                padding: '2px 8px',
+                                                borderRadius: '4px',
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            TOGGLE ROLE
+                                        </button>
                                     </div>
                                 )}
-                                <button
-                                    onClick={(e) => handleDelete(e, f.id)}
-                                    style={{ background: 'transparent', border: 'none', color: '#ef4444', opacity: 0.5, cursor: 'pointer', padding: '4px' }}
-                                    onMouseEnter={(e) => e.target.style.opacity = 1}
-                                    onMouseLeave={(e) => e.target.style.opacity = 0.5}
-                                >
-                                    <XCircle size={14} />
-                                </button>
                             </div>
                         );
                     })}
                 </div>
 
                 {isGraphMode && (
-                    <button
-                        onClick={runAssessment}
-                        disabled={selectedDocs.length < 1}
-                        className="btn-primary"
-                        style={{
-                            width: '100%',
-                            marginTop: '16px',
-                            padding: '14px',
-                            background: selectedDocs.length < 1
-                                ? 'rgba(255,255,255,0.1)'
-                                : selectedDocs.length === 1
-                                    ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
-                                    : 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)',
-                            color: selectedDocs.length < 1 ? 'rgba(255,255,255,0.3)' : 'white'
-                        }}
-                    >
-                        {selectedDocs.length === 0
-                            ? "📥 UPLOAD DOCUMENTS FIRST"
-                            : selectedDocs.length === 1
-                                ? "🔍 ANALYZE 1 DOCUMENT"
-                                : `🚀 ANALYZE ${selectedDocs.length} DOCUMENTS`}
-                    </button>
+                    <div style={{ marginTop: '20px' }}>
+                        <button
+                            onClick={runAssessment}
+                            disabled={!canAnalyze}
+                            className="btn-primary"
+                            style={{
+                                width: '100%',
+                                padding: '16px',
+                                background: !canAnalyze
+                                    ? 'rgba(255,255,255,0.05)'
+                                    : 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
+                                color: !canAnalyze ? 'rgba(255,255,255,0.2)' : 'white',
+                                border: !canAnalyze ? '1px solid rgba(255,255,255,0.1)' : 'none',
+                                opacity: !canAnalyze ? 0.5 : 1
+                            }}
+                        >
+                            <span style={{ fontWeight: 800 }}>RUN SKYCOMPLIANCE™</span>
+                        </button>
+                        {!canAnalyze && files.length > 0 && (
+                            <div style={{ fontSize: '10px', color: '#f59e0b', marginTop: '10px', textAlign: 'center', background: 'rgba(245, 158, 11, 0.05)', padding: '8px', borderRadius: '4px', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
+                                ⚠️ Requires selection of at least **1 Standard** and **1 Project** file.
+                            </div>
+                        )}
+                    </div>
                 )}
 
                 <button

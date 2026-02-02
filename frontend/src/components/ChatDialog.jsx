@@ -90,7 +90,7 @@ const ChatDialog = ({ isFullScreen = false }) => {
                         boxShadow: '0 0 10px #10b981'
                     }}></div>
                     <span style={{ fontWeight: 'bold', fontSize: isFullScreen ? '18px' : '14px' }}>
-                        Compliance Intelligence Analyst
+                        SkyCompliance AI Analyst
                     </span>
                 </div>
                 {!isFullScreen && (
@@ -112,7 +112,7 @@ const ChatDialog = ({ isFullScreen = false }) => {
                 {messages.length === 0 && (
                     <div style={{ opacity: 0.4, textAlign: 'center', marginTop: isFullScreen ? '100px' : '40px' }}>
                         <Bot size={isFullScreen ? 64 : 40} style={{ margin: '0 auto 16px', color: '#6366f1' }} />
-                        <h3 style={{ fontSize: isFullScreen ? '24px' : '18px', marginBottom: '8px' }}>Multilingual Compliance Chat</h3>
+                        <h3 style={{ fontSize: isFullScreen ? '24px' : '18px', marginBottom: '8px' }}>SkyCompliance™ Intelligent Chat</h3>
                         <p style={{ fontSize: isFullScreen ? '16px' : '14px' }}>
                             Ask questions regarding your uploaded PDFs and DOCX files.<br />
                             I can automatically translate and summarize documents in multiple languages.
