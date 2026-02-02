@@ -3,6 +3,7 @@ import axios from 'axios';
 import ThreeScene from './components/ThreeScene';
 import Sidebar from './components/Sidebar';
 import ChatDialog from './components/ChatDialog';
+import { Layout, MessageSquare } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
@@ -11,12 +12,13 @@ function App() {
   const [selectedNode, setSelectedNode] = useState(null);
   const [loading, setLoading] = useState(false);
   const [assessmentId, setAssessmentId] = useState(null);
+  const [mode, setMode] = useState('graph'); // 'graph' | 'chat'
 
   const handleAssessmentComplete = async (assessmentId) => {
     if (!assessmentId) {
       setGraphData(null);
       setSelectedNode(null);
-      setLoading(false); // Ensure loading stops
+      setLoading(false);
       return;
     }
 
@@ -33,8 +35,9 @@ function App() {
 
   const handleStartAnalysis = () => {
     setLoading(true);
-    setGraphData(null); // Clear old graph to show spinner properly
+    setGraphData(null);
     setSelectedNode(null);
+    setMode('graph'); // Switch to graph mode when analysis starts
   };
 
   const handleNodeClick = (node) => {
@@ -47,40 +50,123 @@ function App() {
         onAssessmentComplete={handleAssessmentComplete}
         onStartAnalysis={handleStartAnalysis}
         selectedNode={selectedNode}
-        onNodeClick={handleNodeClick}
         assessmentId={assessmentId}
+        mode={mode}
       />
 
-      <main style={{ flex: 1, position: 'relative' }}>
-        <ThreeScene
-          graphData={graphData}
-          onNodeClick={handleNodeClick}
-          selectedNode={selectedNode}
-          loading={loading}
-        />
+      <main style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+        {/* Top Navigation Mode Switcher */}
+        <div style={{
+          padding: '12px 24px',
+          background: 'rgba(20, 20, 25, 0.8)',
+          backdropFilter: 'blur(10px)',
+          borderBottom: '1px solid rgba(255,255,255,0.05)',
+          display: 'flex',
+          justifyContent: 'center',
+          gap: '20px',
+          zIndex: 10
+        }}>
+          <button
+            onClick={() => setMode('graph')}
+            style={{
+              background: mode === 'graph' ? 'rgba(168, 85, 247, 0.2)' : 'transparent',
+              border: '1px solid',
+              borderColor: mode === 'graph' ? '#a855f7' : 'rgba(255,255,255,0.1)',
+              color: mode === 'graph' ? '#a855f7' : 'rgba(255,255,255,0.5)',
+              padding: '8px 16px',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '14px',
+              fontWeight: 600,
+              transition: 'all 0.2s'
+            }}
+          >
+            <Layout size={18} /> GRAPH MODE
+          </button>
+          <button
+            onClick={() => setMode('chat')}
+            style={{
+              background: mode === 'chat' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+              border: '1px solid',
+              borderColor: mode === 'chat' ? '#6366f1' : 'rgba(255,255,255,0.1)',
+              color: mode === 'chat' ? '#6366f1' : 'rgba(255,255,255,0.5)',
+              padding: '8px 16px',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '14px',
+              fontWeight: 600,
+              transition: 'all 0.2s'
+            }}
+          >
+            <MessageSquare size={18} /> CHAT MODE
+          </button>
+        </div>
 
-        {/* Chat Dialog */}
-        <ChatDialog />
-
-        {!graphData && !loading && (
-          <div style={{
-            position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            textAlign: 'center',
-            opacity: 0.5,
-            pointerEvents: 'none'
-          }}>
-            <h2 style={{ fontSize: '32px', marginBottom: '8px' }}>Compliance Galaxy</h2>
-            <p>Upload documents and run analysis to visualize compliance relationships.</p>
-          </div>
-        )}
+        <div style={{ flex: 1, position: 'relative' }}>
+          {mode === 'graph' ? (
+            <>
+              <ThreeScene
+                graphData={graphData}
+                onNodeClick={handleNodeClick}
+                selectedNode={selectedNode}
+                loading={loading}
+              />
+              {!graphData && !loading && (
+                <div style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  textAlign: 'center',
+                  opacity: 0.5,
+                  pointerEvents: 'none'
+                }}>
+                  <h2 style={{ fontSize: '32px', marginBottom: '8px' }}>Compliance Galaxy</h2>
+                  <p>Upload documents and run analysis to visualize compliance relationships.</p>
+                </div>
+              )}
+              {/* Floating Chat in Graph Mode */}
+              <ChatDialog />
+            </>
+          ) : (
+            <div style={{ width: '100%', height: '100%', padding: '40px', display: 'flex', justifyContent: 'center' }}>
+              <ChatDialog isFullScreen={true} />
+            </div>
+          )}
+        </div>
       </main>
 
       <style>{`
         @keyframes spin {
           to { transform: rotate(360deg); }
+        }
+        .btn-primary {
+          background: linear-gradient(135deg, #a855f7 0%, #6366f1 100%);
+          border: none;
+          color: white;
+          border-radius: 8px;
+          cursor: pointer;
+          font-weight: 600;
+          transition: transform 0.2s, opacity 0.2s;
+        }
+        .btn-primary:hover {
+          transform: translateY(-2px);
+          opacity: 0.9;
+        }
+        .btn-primary:active {
+          transform: translateY(0);
+        }
+        .glass-panel {
+          background: rgba(255, 255, 255, 0.03);
+          backdrop-filter: blur(10px);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 12px;
         }
       `}</style>
     </div>

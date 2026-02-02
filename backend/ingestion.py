@@ -2,10 +2,19 @@ from pypdf import PdfReader
 from io import BytesIO
 from typing import List, Dict
 import re
-from .models import SessionLocal, Document, Clause
+from .models import store
 from .rag import rag_engine
 
-def parse_pdf(file_content: bytes, filename: str, file_type: str, version: str = "1.0"):
+# Try to import python-docx, will be available after installing
+try:
+    from docx import Document as DocxDocument
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+
+
+def parse_pdf(file_content: bytes, filename: str) -> List[Dict]:
+    """Parse PDF and extract clauses."""
     reader = PdfReader(BytesIO(file_content))
     clauses = []
     
@@ -14,6 +23,9 @@ def parse_pdf(file_content: bytes, filename: str, file_type: str, version: str =
     
     for page_num, page in enumerate(reader.pages):
         page_text = page.extract_text()
+        if not page_text:
+            continue
+            
         matches = list(re.finditer(pattern, page_text))
         
         if not matches:
@@ -39,37 +51,110 @@ def parse_pdf(file_content: bytes, filename: str, file_type: str, version: str =
                     "page_number": page_num + 1,
                     "severity": "MUST" if "shall" in text.lower() or "must" in text.lower() else "SHOULD"
                 })
+    
+    return clauses
 
-    # Save to DB
-    db = SessionLocal()
-    db_doc = Document(filename=filename, file_type=file_type, version=version)
-    db.add(db_doc)
-    db.commit()
-    db.refresh(db_doc)
 
+def parse_docx(file_content: bytes, filename: str) -> List[Dict]:
+    """Parse DOCX and extract clauses."""
+    if not DOCX_AVAILABLE:
+        raise ImportError("python-docx is not installed. Run: pip install python-docx")
+    
+    doc = DocxDocument(BytesIO(file_content))
+    clauses = []
+    
+    # regex for clause-like patterns
+    pattern = r'^(\d+\.[\d\.]+|[A-Z]\.[\d\.]+|Article\s+\d+:?)\s+'
+    
+    current_text = []
+    current_clause_id = None
+    paragraph_counter = 0
+    
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if not text:
+            continue
+        
+        match = re.match(pattern, text)
+        
+        if match:
+            # Save previous clause if exists
+            if current_clause_id and current_text:
+                full_text = "\n".join(current_text)
+                clauses.append({
+                    "clause_id": current_clause_id,
+                    "text": full_text,
+                    "page_number": 1,  # DOCX doesn't have reliable page numbers
+                    "severity": "MUST" if "shall" in full_text.lower() or "must" in full_text.lower() else "SHOULD"
+                })
+            
+            current_clause_id = match.group(1).strip()
+            current_text = [text]
+        elif current_clause_id:
+            current_text.append(text)
+        else:
+            # No clause structure found, treat as paragraph
+            if len(text) > 20:
+                clauses.append({
+                    "clause_id": f"Para-{paragraph_counter}",
+                    "text": text,
+                    "page_number": 1,
+                    "severity": "UNKNOWN"
+                })
+                paragraph_counter += 1
+    
+    # Save last clause
+    if current_clause_id and current_text:
+        full_text = "\n".join(current_text)
+        clauses.append({
+            "clause_id": current_clause_id,
+            "text": full_text,
+            "page_number": 1,
+            "severity": "MUST" if "shall" in full_text.lower() or "must" in full_text.lower() else "SHOULD"
+        })
+    
+    return clauses
+
+
+def parse_document(file_content: bytes, filename: str, file_type: str, version: str = "1.0") -> int:
+    """
+    Parse a document (PDF or DOCX) and store in memory.
+    Returns the document ID.
+    """
+    # Determine file type and parse
+    filename_lower = filename.lower()
+    
+    if filename_lower.endswith('.pdf'):
+        clauses = parse_pdf(file_content, filename)
+    elif filename_lower.endswith('.docx'):
+        clauses = parse_docx(file_content, filename)
+    else:
+        raise ValueError(f"Unsupported file type: {filename}")
+    
+    # Add document to in-memory store
+    doc = store.add_document(filename=filename, file_type=file_type, version=version)
+    
+    # Add clauses to store and prepare for vector ingestion
     ingest_clauses = []
     for c in clauses:
-        db_clause = Clause(
-            document_id=db_doc.id,
+        store.add_clause(
+            document_id=doc.id,
             clause_id=c['clause_id'],
             text=c['text'],
             page_number=c['page_number'],
             severity=c['severity']
         )
-        db.add(db_clause)
         ingest_clauses.append({
             "clause_id": c['clause_id'],
-            "doc_id": db_doc.id,
+            "doc_id": doc.id,
+            "doc_name": filename,  # Include filename for chat responses
             "text": c['text'],
             "page_number": c['page_number']
         })
     
-    db.commit()
+    # Ingest all documents into Vector DB (not just regulations)
+    # This enables chatting with any uploaded document
+    if ingest_clauses:
+        rag_engine.ingest_documents(ingest_clauses)
     
-    doc_id = db_doc.id # Capture ID while session is active
-
-    # Ingest all documents into Vector DB for RAG search
-    rag_engine.ingest_documents(ingest_clauses)
-    
-    db.close()
-    return doc_id
+    return doc.id

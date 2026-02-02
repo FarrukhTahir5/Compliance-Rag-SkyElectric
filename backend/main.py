@@ -1,11 +1,9 @@
 import os
-from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-from typing import List
 from contextlib import asynccontextmanager
-from .models import SessionLocal, init_db, Document, Clause, Assessment, AssessmentResult
-from .ingestion import parse_pdf
+from .models import store, Document, Clause, Assessment, AssessmentResult
+from .ingestion import parse_document
 from .rag import rag_engine
 from fastapi.responses import StreamingResponse
 from reportlab.lib.pagesizes import letter
@@ -17,7 +15,9 @@ import io
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    # Clear any existing data on startup (fresh session)
+    store.reset()
+    rag_engine.clear_index()
     yield
 
 app = FastAPI(title="3D Compliance Intelligence API", lifespan=lifespan)
@@ -31,81 +31,76 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+ALLOWED_EXTENSIONS = {'.pdf', '.docx'}
 
 @app.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
-    file_type: str = Form(...), # 'regulation' | 'customer'
+    file_type: str = Form(...),  # 'regulation' | 'customer'
     version: str = Form("1.0"),
-    db: Session = Depends(get_db)
 ):
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+    # Check file extension
+    filename_lower = file.filename.lower()
+    if not any(filename_lower.endswith(ext) for ext in ALLOWED_EXTENSIONS):
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Only {', '.join(ALLOWED_EXTENSIONS)} files are supported."
+        )
     
     content = await file.read()
-    doc_id = parse_pdf(content, file.filename, file_type, version)
+    doc_id = parse_document(content, file.filename, file_type, version)
     return {"doc_id": doc_id, "filename": file.filename}
 
 @app.get("/documents")
-def list_documents(db: Session = Depends(get_db)):
-    return db.query(Document).all()
+def list_documents():
+    docs = store.get_all_documents()
+    return [
+        {
+            "id": d.id,
+            "filename": d.filename,
+            "file_type": d.file_type,
+            "version": d.version,
+            "uploaded_at": d.uploaded_at.isoformat()
+        }
+        for d in docs
+    ]
 
 @app.delete("/documents/{doc_id}")
-def delete_document(doc_id: int, db: Session = Depends(get_db)):
-    doc = db.query(Document).filter(Document.id == doc_id).first()
+def delete_document(doc_id: int):
+    doc = store.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
-    # 1. Find all assessments involving this document
-    assessments = db.query(Assessment).filter(
-        (Assessment.customer_doc_id == doc_id) | 
-        (Assessment.regulation_doc_id == doc_id)
-    ).all()
-    
+    # Delete related assessments
+    assessments = store.get_assessments_by_doc(doc_id)
     for a in assessments:
-        # 2. Delete all results for these assessments
-        db.query(AssessmentResult).filter(AssessmentResult.assessment_id == a.id).delete()
-        db.delete(a)
+        store.delete_assessment(a.id)
     
-    # 3. Delete clauses for this document
-    db.query(Clause).filter(Clause.document_id == doc_id).delete()
+    # Delete document and its clauses
+    store.delete_document(doc_id)
     
-    # 4. Finally delete the document
-    db.delete(doc)
-    db.commit()
     return {"message": "Document deleted"}
 
 @app.post("/reset")
-def reset_data(db: Session = Depends(get_db)):
-    db.query(AssessmentResult).delete()
-    db.query(Assessment).delete()
-    db.query(Clause).delete()
-    db.query(Document).delete()
-    db.commit()
-    # Also clear FAISS index
-    import shutil
-    if os.path.exists("backend/data/faiss_index"):
-        shutil.rmtree("backend/data/faiss_index")
+def reset_data():
+    store.reset()
+    rag_engine.clear_index()
     return {"message": "All data cleared"}
 
 @app.post("/assess")
 async def assess_compliance(
     customer_doc_id: int,
     regulation_doc_id: int,
-    db: Session = Depends(get_db)
 ):
-    customer_clauses = db.query(Clause).filter(Clause.document_id == customer_doc_id).all()
+    customer_clauses = store.get_clauses_by_document(customer_doc_id)
     
-    assessment = Assessment(customer_doc_id=customer_doc_id, regulation_doc_id=regulation_doc_id)
-    db.add(assessment)
-    db.commit()
-    db.refresh(assessment)
+    if not customer_clauses:
+        raise HTTPException(status_code=400, detail="No clauses found in customer document")
+    
+    assessment = store.add_assessment(
+        customer_doc_id=customer_doc_id, 
+        regulation_doc_id=regulation_doc_id
+    )
     
     results = []
     for c_clause in customer_clauses:
@@ -117,10 +112,7 @@ async def assess_compliance(
             
         best_match_doc, score = similar_docs[0]
         reg_clause_id_val = best_match_doc.metadata['clause_id']
-        reg_clause = db.query(Clause).filter(
-            Clause.document_id == regulation_doc_id, 
-            Clause.clause_id == reg_clause_id_val
-        ).first()
+        reg_clause = store.get_clause_by_doc_and_clause_id(regulation_doc_id, reg_clause_id_val)
         
         if not reg_clause:
             continue
@@ -128,7 +120,7 @@ async def assess_compliance(
         # Run LLM Analysis
         analysis = rag_engine.analyze_compliance(c_clause.text, reg_clause.text)
         
-        res = AssessmentResult(
+        res = store.add_result(
             assessment_id=assessment.id,
             customer_clause_id=c_clause.id,
             regulation_clause_id=reg_clause.id,
@@ -138,27 +130,21 @@ async def assess_compliance(
             evidence_text=analysis.get('evidence_text', 'N/A'),
             confidence=analysis['confidence']
         )
-        db.add(res)
         results.append(res)
         
-    db.commit()
     return {"assessment_id": assessment.id, "results_count": len(results)}
 
 @app.get("/debug/vector-store")
-def debug_vector_store(db: Session = Depends(get_db)):
-    import os
-    vector_db_path = "backend/data/faiss_index"
-    
+def debug_vector_store():
     info = {
-        "vector_store_exists": os.path.exists(vector_db_path),
-        "total_documents": db.query(Document).count(),
-        "total_clauses": db.query(Clause).count(),
+        "vector_store_exists": rag_engine.vector_store is not None,
+        "total_documents": len(store.documents),
+        "total_clauses": len(store.clauses),
     }
     
-    if os.path.exists(vector_db_path):
+    if rag_engine.vector_store is not None:
         try:
-            vector_store = FAISS.load_local(vector_db_path, rag_engine.embeddings, allow_dangerous_deserialization=True)
-            info["vector_store_size"] = len(vector_store.docstore._dict)
+            info["vector_store_size"] = len(rag_engine.vector_store.docstore._dict)
         except Exception as e:
             info["vector_store_error"] = str(e)
     
@@ -167,46 +153,45 @@ def debug_vector_store(db: Session = Depends(get_db)):
 @app.post("/chat")
 async def chat_with_docs(
     query: str = Form(...),
-    db: Session = Depends(get_db)
 ):
     # Search across all documents for the most relevant context
     similar_docs = rag_engine.retrieve_similar_clauses(query, top_k=5)
     
-    print(f"DEBUG: Chat query: '{query}'")
-    print(f"DEBUG: Found {len(similar_docs)} similar documents")
-    
     if not similar_docs:
-        # Check if we have any documents at all
-        total_docs = db.query(Document).count()
-        total_clauses = db.query(Clause).count()
-        print(f"DEBUG: Total documents in DB: {total_docs}, Total clauses: {total_clauses}")
-        
-        if total_docs == 0:
-            return {"answer": "No documents have been uploaded yet. Please upload some documents first."}
-        else:
-            return {"answer": f"I couldn't find any relevant information for your query in the {total_docs} uploaded documents with {total_clauses} clauses. Try rephrasing your question or check if the documents contain the information you're looking for."}
-        
-    context = "\n\n".join([f"Source: {d.metadata.get('clause_id')} (Doc ID: {d.metadata.get('doc_id')}, Page: {d.metadata.get('page_number', 'N/A')})\nContent: {d.page_content}" for d, score in similar_docs])
+        return {"answer": "I couldn't find any relevant information in your documents. Please upload some documents first."}
     
-    print(f"DEBUG: Context length: {len(context)} characters")
+    # Build context with document NAME (not just ID), numbered for citation mapping
+    context_parts = []
+    for i, (d, score) in enumerate(similar_docs, 1):
+        doc_obj = store.get_document(d.metadata.get('doc_id'))
+        doc_name = doc_obj.filename if doc_obj else 'Unknown Document'
+        clause_id = d.metadata.get('clause_id', 'N/A')
+        page = d.metadata.get('page_number', 'N/A')
+        context_parts.append(
+            f"REF [{i}]:\n"
+            f"File: {doc_name} | Clause: {clause_id} | Page: {page}\n"
+            f"Content: {d.page_content}"
+        )
+    
+    context = "\n\n---\n\n".join(context_parts)
     
     # Use LLM to answer the question based on context
     answer = rag_engine.answer_general_question(query, context)
     return {"answer": answer}
 
 @app.get("/graph/{assessment_id}")
-def get_graph_data(assessment_id: int, db: Session = Depends(get_db)):
-    assessment = db.query(Assessment).get(assessment_id)
+def get_graph_data(assessment_id: int):
+    assessment = store.get_assessment(assessment_id)
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
         
-    results = db.query(AssessmentResult).filter(AssessmentResult.assessment_id == assessment_id).all()
+    results = store.get_results_by_assessment(assessment_id)
     
     nodes = []
     edges = []
     
     # Add regulation nodes (planets)
-    reg_clauses = db.query(Clause).filter(Clause.document_id == assessment.regulation_doc_id).all()
+    reg_clauses = store.get_clauses_by_document(assessment.regulation_doc_id)
     for rc in reg_clauses:
         nodes.append({
             "id": f"reg_{rc.id}",
@@ -218,7 +203,7 @@ def get_graph_data(assessment_id: int, db: Session = Depends(get_db)):
         
     # Add customer nodes and edges
     for r in results:
-        cust_clause = db.query(Clause).get(r.customer_clause_id)
+        cust_clause = store.get_clause(r.customer_clause_id)
         nodes.append({
             "id": f"cust_{r.customer_clause_id}",
             "label": cust_clause.clause_id if cust_clause else str(r.customer_clause_id),
@@ -238,12 +223,12 @@ def get_graph_data(assessment_id: int, db: Session = Depends(get_db)):
     return {"nodes": nodes, "edges": edges}
 
 @app.get("/report/{assessment_id}")
-def generate_report(assessment_id: int, db: Session = Depends(get_db)):
-    assessment = db.query(Assessment).get(assessment_id)
+def generate_report(assessment_id: int):
+    assessment = store.get_assessment(assessment_id)
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
     
-    results = db.query(AssessmentResult).filter(AssessmentResult.assessment_id == assessment_id).all()
+    results = store.get_results_by_assessment(assessment_id)
     
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
@@ -254,19 +239,18 @@ def generate_report(assessment_id: int, db: Session = Depends(get_db)):
     elements.append(Spacer(1, 12))
     
     # Header info
-    customer_doc = db.query(Document).get(assessment.customer_doc_id)
-    reg_doc = db.query(Document).get(assessment.regulation_doc_id)
+    customer_doc = store.get_document(assessment.customer_doc_id)
+    reg_doc = store.get_document(assessment.regulation_doc_id)
     
-    elements.append(Paragraph(f"Customer Document: {customer_doc.filename}", styles['Normal']))
-    elements.append(Paragraph(f"Regulation Document: {reg_doc.filename}", styles['Normal']))
+    elements.append(Paragraph(f"Customer Document: {customer_doc.filename if customer_doc else 'N/A'}", styles['Normal']))
+    elements.append(Paragraph(f"Regulation Document: {reg_doc.filename if reg_doc else 'N/A'}", styles['Normal']))
     elements.append(Paragraph(f"Date: {assessment.created_at.strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
     elements.append(Spacer(1, 24))
     
     # Table data
     data = [["Clause ID", "Status", "Risk", "Reasoning"]]
     for r in results:
-        cust_clause = db.query(Clause).get(r.customer_clause_id)
-        # Truncate reasoning for table
+        cust_clause = store.get_clause(r.customer_clause_id)
         reasoning = r.reasoning
         data.append([
             cust_clause.clause_id if cust_clause else f"Clause {r.customer_clause_id}",
