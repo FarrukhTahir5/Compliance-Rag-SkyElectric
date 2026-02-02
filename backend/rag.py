@@ -29,12 +29,18 @@ class RAGEngine:
             for c in clauses
         ]
         
-        if self.vector_store is None:
-            # Create new index
-            self.vector_store = FAISS.from_texts(texts, self.embeddings, metadatas=metadatas)
-        else:
-            # Add to existing index
-            self.vector_store.add_texts(texts, metadatas=metadatas)
+        try:
+            if self.vector_store is None:
+                # Create new index
+                self.vector_store = FAISS.from_texts(texts, self.embeddings, metadatas=metadatas)
+            else:
+                # Add to existing index
+                self.vector_store.add_texts(texts, metadatas=metadatas)
+        except Exception as e:
+            print(f"DEBUG: Vector Store Ingestion Error: {e}")
+            # Raise a custom exception or handle it gracefully
+            # For now, we'll raise it so the API can return a 400/500 with a better message
+            raise Exception(f"Failed to process document embeddings. This is often due to OpenAI quota limits: {str(e)}")
         
         return self.vector_store
 
