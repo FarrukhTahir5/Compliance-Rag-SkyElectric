@@ -1,0 +1,1662 @@
+diff --git a/backend/__pycache__/ingestion.cpython-313.pyc b/backend/__pycache__/ingestion.cpython-313.pyc
+index 7d9f65c..0157d1b 100644
+Binary files a/backend/__pycache__/ingestion.cpython-313.pyc and b/backend/__pycache__/ingestion.cpython-313.pyc differ
+diff --git a/backend/__pycache__/main.cpython-313.pyc b/backend/__pycache__/main.cpython-313.pyc
+index 2cb9f40..c0be527 100644
+Binary files a/backend/__pycache__/main.cpython-313.pyc and b/backend/__pycache__/main.cpython-313.pyc differ
+diff --git a/backend/__pycache__/models.cpython-313.pyc b/backend/__pycache__/models.cpython-313.pyc
+index 2911877..6f2475c 100644
+Binary files a/backend/__pycache__/models.cpython-313.pyc and b/backend/__pycache__/models.cpython-313.pyc differ
+diff --git a/backend/__pycache__/rag.cpython-313.pyc b/backend/__pycache__/rag.cpython-313.pyc
+index 192020b..b2f3efe 100644
+Binary files a/backend/__pycache__/rag.cpython-313.pyc and b/backend/__pycache__/rag.cpython-313.pyc differ
+diff --git a/backend/ingestion.py b/backend/ingestion.py
+index b081de7..0a49e7e 100644
+--- a/backend/ingestion.py
++++ b/backend/ingestion.py
+@@ -2,10 +2,19 @@ from pypdf import PdfReader
+ from io import BytesIO
+ from typing import List, Dict
+ import re
+-from .models import SessionLocal, Document, Clause
++from .models import store
+ from .rag import rag_engine
+ 
+-def parse_pdf(file_content: bytes, filename: str, file_type: str, version: str = "1.0"):
++# Try to import python-docx, will be available after installing
++try:
++    from docx import Document as DocxDocument
++    DOCX_AVAILABLE = True
++except ImportError:
++    DOCX_AVAILABLE = False
++
++
++def parse_pdf(file_content: bytes, filename: str) -> List[Dict]:
++    """Parse PDF and extract clauses."""
+     reader = PdfReader(BytesIO(file_content))
+     clauses = []
+     
+@@ -14,6 +23,9 @@ def parse_pdf(file_content: bytes, filename: str, file_type: str, version: str =
+     
+     for page_num, page in enumerate(reader.pages):
+         page_text = page.extract_text()
++        if not page_text:
++            continue
++            
+         matches = list(re.finditer(pattern, page_text))
+         
+         if not matches:
+@@ -39,38 +51,110 @@ def parse_pdf(file_content: bytes, filename: str, file_type: str, version: str =
+                     "page_number": page_num + 1,
+                     "severity": "MUST" if "shall" in text.lower() or "must" in text.lower() else "SHOULD"
+                 })
++    
++    return clauses
+ 
+-    # Save to DB
+-    db = SessionLocal()
+-    db_doc = Document(filename=filename, file_type=file_type, version=version)
+-    db.add(db_doc)
+-    db.commit()
+-    db.refresh(db_doc)
+ 
++def parse_docx(file_content: bytes, filename: str) -> List[Dict]:
++    """Parse DOCX and extract clauses."""
++    if not DOCX_AVAILABLE:
++        raise ImportError("python-docx is not installed. Run: pip install python-docx")
++    
++    doc = DocxDocument(BytesIO(file_content))
++    clauses = []
++    
++    # regex for clause-like patterns
++    pattern = r'^(\d+\.[\d\.]+|[A-Z]\.[\d\.]+|Article\s+\d+:?)\s+'
++    
++    current_text = []
++    current_clause_id = None
++    paragraph_counter = 0
++    
++    for para in doc.paragraphs:
++        text = para.text.strip()
++        if not text:
++            continue
++        
++        match = re.match(pattern, text)
++        
++        if match:
++            # Save previous clause if exists
++            if current_clause_id and current_text:
++                full_text = "\n".join(current_text)
++                clauses.append({
++                    "clause_id": current_clause_id,
++                    "text": full_text,
++                    "page_number": 1,  # DOCX doesn't have reliable page numbers
++                    "severity": "MUST" if "shall" in full_text.lower() or "must" in full_text.lower() else "SHOULD"
++                })
++            
++            current_clause_id = match.group(1).strip()
++            current_text = [text]
++        elif current_clause_id:
++            current_text.append(text)
++        else:
++            # No clause structure found, treat as paragraph
++            if len(text) > 20:
++                clauses.append({
++                    "clause_id": f"Para-{paragraph_counter}",
++                    "text": text,
++                    "page_number": 1,
++                    "severity": "UNKNOWN"
++                })
++                paragraph_counter += 1
++    
++    # Save last clause
++    if current_clause_id and current_text:
++        full_text = "\n".join(current_text)
++        clauses.append({
++            "clause_id": current_clause_id,
++            "text": full_text,
++            "page_number": 1,
++            "severity": "MUST" if "shall" in full_text.lower() or "must" in full_text.lower() else "SHOULD"
++        })
++    
++    return clauses
++
++
++def parse_document(file_content: bytes, filename: str, file_type: str, version: str = "1.0") -> int:
++    """
++    Parse a document (PDF or DOCX) and store in memory.
++    Returns the document ID.
++    """
++    # Determine file type and parse
++    filename_lower = filename.lower()
++    
++    if filename_lower.endswith('.pdf'):
++        clauses = parse_pdf(file_content, filename)
++    elif filename_lower.endswith('.docx'):
++        clauses = parse_docx(file_content, filename)
++    else:
++        raise ValueError(f"Unsupported file type: {filename}")
++    
++    # Add document to in-memory store
++    doc = store.add_document(filename=filename, file_type=file_type, version=version)
++    
++    # Add clauses to store and prepare for vector ingestion
+     ingest_clauses = []
+     for c in clauses:
+-        db_clause = Clause(
+-            document_id=db_doc.id,
++        store.add_clause(
++            document_id=doc.id,
+             clause_id=c['clause_id'],
+             text=c['text'],
+             page_number=c['page_number'],
+             severity=c['severity']
+         )
+-        db.add(db_clause)
+         ingest_clauses.append({
+             "clause_id": c['clause_id'],
+-            "doc_id": db_doc.id,
++            "doc_id": doc.id,
++            "doc_name": filename,  # Include filename for chat responses
+             "text": c['text'],
+             "page_number": c['page_number']
+         })
+     
+-    db.commit()
+-    
+-    doc_id = db_doc.id # Capture ID while session is active
+-
+-    # Ingest into Vector DB
+-    if file_type == 'regulation':
++    # Ingest all documents into Vector DB (not just regulations)
++    # This enables chatting with any uploaded document
++    if ingest_clauses:
+         rag_engine.ingest_documents(ingest_clauses)
+     
+-    db.close()
+-    return doc_id
++    return doc.id
+diff --git a/backend/main.py b/backend/main.py
+index ef6cb81..5866536 100644
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -1,11 +1,9 @@
+ import os
+-from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
++from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+ from fastapi.middleware.cors import CORSMiddleware
+-from sqlalchemy.orm import Session
+-from typing import List
+ from contextlib import asynccontextmanager
+-from .models import SessionLocal, init_db, Document, Clause, Assessment, AssessmentResult
+-from .ingestion import parse_pdf
++from .models import store, Document, Clause, Assessment, AssessmentResult
++from .ingestion import parse_document
+ from .rag import rag_engine
+ from fastapi.responses import StreamingResponse
+ from reportlab.lib.pagesizes import letter
+@@ -16,7 +14,9 @@ import io
+ 
+ @asynccontextmanager
+ async def lifespan(app: FastAPI):
+-    init_db()
++    # Clear any existing data on startup (fresh session)
++    store.reset()
++    rag_engine.clear_index()
+     yield
+ 
+ app = FastAPI(title="3D Compliance Intelligence API", lifespan=lifespan)
+@@ -30,81 +30,76 @@ app.add_middleware(
+     allow_headers=["*"],
+ )
+ 
+-def get_db():
+-    db = SessionLocal()
+-    try:
+-        yield db
+-    finally:
+-        db.close()
++ALLOWED_EXTENSIONS = {'.pdf', '.docx'}
+ 
+ @app.post("/upload")
+ async def upload_file(
+     file: UploadFile = File(...),
+-    file_type: str = Form(...), # 'regulation' | 'customer'
++    file_type: str = Form(...),  # 'regulation' | 'customer'
+     version: str = Form("1.0"),
+-    db: Session = Depends(get_db)
+ ):
+-    if not file.filename.lower().endswith(".pdf"):
+-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
++    # Check file extension
++    filename_lower = file.filename.lower()
++    if not any(filename_lower.endswith(ext) for ext in ALLOWED_EXTENSIONS):
++        raise HTTPException(
++            status_code=400, 
++            detail=f"Only {', '.join(ALLOWED_EXTENSIONS)} files are supported."
++        )
+     
+     content = await file.read()
+-    doc_id = parse_pdf(content, file.filename, file_type, version)
++    doc_id = parse_document(content, file.filename, file_type, version)
+     return {"doc_id": doc_id, "filename": file.filename}
+ 
+ @app.get("/documents")
+-def list_documents(db: Session = Depends(get_db)):
+-    return db.query(Document).all()
++def list_documents():
++    docs = store.get_all_documents()
++    return [
++        {
++            "id": d.id,
++            "filename": d.filename,
++            "file_type": d.file_type,
++            "version": d.version,
++            "uploaded_at": d.uploaded_at.isoformat()
++        }
++        for d in docs
++    ]
+ 
+ @app.delete("/documents/{doc_id}")
+-def delete_document(doc_id: int, db: Session = Depends(get_db)):
+-    doc = db.query(Document).filter(Document.id == doc_id).first()
++def delete_document(doc_id: int):
++    doc = store.get_document(doc_id)
+     if not doc:
+         raise HTTPException(status_code=404, detail="Document not found")
+     
+-    # 1. Find all assessments involving this document
+-    assessments = db.query(Assessment).filter(
+-        (Assessment.customer_doc_id == doc_id) | 
+-        (Assessment.regulation_doc_id == doc_id)
+-    ).all()
+-    
++    # Delete related assessments
++    assessments = store.get_assessments_by_doc(doc_id)
+     for a in assessments:
+-        # 2. Delete all results for these assessments
+-        db.query(AssessmentResult).filter(AssessmentResult.assessment_id == a.id).delete()
+-        db.delete(a)
++        store.delete_assessment(a.id)
+     
+-    # 3. Delete clauses for this document
+-    db.query(Clause).filter(Clause.document_id == doc_id).delete()
++    # Delete document and its clauses
++    store.delete_document(doc_id)
+     
+-    # 4. Finally delete the document
+-    db.delete(doc)
+-    db.commit()
+     return {"message": "Document deleted"}
+ 
+ @app.post("/reset")
+-def reset_data(db: Session = Depends(get_db)):
+-    db.query(AssessmentResult).delete()
+-    db.query(Assessment).delete()
+-    db.query(Clause).delete()
+-    db.query(Document).delete()
+-    db.commit()
+-    # Also clear FAISS index
+-    import shutil
+-    if os.path.exists("backend/data/faiss_index"):
+-        shutil.rmtree("backend/data/faiss_index")
++def reset_data():
++    store.reset()
++    rag_engine.clear_index()
+     return {"message": "All data cleared"}
+ 
+ @app.post("/assess")
+ async def assess_compliance(
+     customer_doc_id: int,
+     regulation_doc_id: int,
+-    db: Session = Depends(get_db)
+ ):
+-    customer_clauses = db.query(Clause).filter(Clause.document_id == customer_doc_id).all()
++    customer_clauses = store.get_clauses_by_document(customer_doc_id)
+     
+-    assessment = Assessment(customer_doc_id=customer_doc_id, regulation_doc_id=regulation_doc_id)
+-    db.add(assessment)
+-    db.commit()
+-    db.refresh(assessment)
++    if not customer_clauses:
++        raise HTTPException(status_code=400, detail="No clauses found in customer document")
++    
++    assessment = store.add_assessment(
++        customer_doc_id=customer_doc_id, 
++        regulation_doc_id=regulation_doc_id
++    )
+     
+     results = []
+     for c_clause in customer_clauses:
+@@ -116,10 +111,7 @@ async def assess_compliance(
+             
+         best_match_doc, score = similar_docs[0]
+         reg_clause_id_val = best_match_doc.metadata['clause_id']
+-        reg_clause = db.query(Clause).filter(
+-            Clause.document_id == regulation_doc_id, 
+-            Clause.clause_id == reg_clause_id_val
+-        ).first()
++        reg_clause = store.get_clause_by_doc_and_clause_id(regulation_doc_id, reg_clause_id_val)
+         
+         if not reg_clause:
+             continue
+@@ -127,7 +119,7 @@ async def assess_compliance(
+         # Run LLM Analysis
+         analysis = rag_engine.analyze_compliance(c_clause.text, reg_clause.text)
+         
+-        res = AssessmentResult(
++        res = store.add_result(
+             assessment_id=assessment.id,
+             customer_clause_id=c_clause.id,
+             regulation_clause_id=reg_clause.id,
+@@ -137,42 +129,51 @@ async def assess_compliance(
+             evidence_text=analysis.get('evidence_text', 'N/A'),
+             confidence=analysis['confidence']
+         )
+-        db.add(res)
+         results.append(res)
+         
+-    db.commit()
+     return {"assessment_id": assessment.id, "results_count": len(results)}
+ 
+ @app.post("/chat")
+ async def chat_with_docs(
+     query: str = Form(...),
+-    db: Session = Depends(get_db)
+ ):
+     # Search across all documents for the most relevant context
+     similar_docs = rag_engine.retrieve_similar_clauses(query, top_k=5)
+     
+     if not similar_docs:
+-        return {"answer": "I couldn't find any relevant information in your documents."}
+-        
+-    context = "\n\n".join([f"Source: {d.metadata.get('clause_id')} (Doc ID: {d.metadata.get('doc_id')}, Page: {d.metadata.get('page_number', 'N/A')})\nContent: {d.page_content}" for d, score in similar_docs])
++        return {"answer": "I couldn't find any relevant information in your documents. Please upload some documents first."}
++    
++    # Build context with document NAME (not just ID), numbered for citation mapping
++    context_parts = []
++    for i, (d, score) in enumerate(similar_docs, 1):
++        doc_name = d.metadata.get('doc_name', 'Unknown Document')
++        clause_id = d.metadata.get('clause_id', 'N/A')
++        page = d.metadata.get('page_number', 'N/A')
++        context_parts.append(
++            f"REF [{i}]:\n"
++            f"File: {doc_name} | Clause: {clause_id} | Page: {page}\n"
++            f"Content: {d.page_content}"
++        )
++    
++    context = "\n\n---\n\n".join(context_parts)
+     
+     # Use LLM to answer the question based on context
+     answer = rag_engine.answer_general_question(query, context)
+     return {"answer": answer}
+ 
+ @app.get("/graph/{assessment_id}")
+-def get_graph_data(assessment_id: int, db: Session = Depends(get_db)):
+-    assessment = db.query(Assessment).get(assessment_id)
++def get_graph_data(assessment_id: int):
++    assessment = store.get_assessment(assessment_id)
+     if not assessment:
+         raise HTTPException(status_code=404, detail="Assessment not found")
+         
+-    results = db.query(AssessmentResult).filter(AssessmentResult.assessment_id == assessment_id).all()
++    results = store.get_results_by_assessment(assessment_id)
+     
+     nodes = []
+     edges = []
+     
+     # Add regulation nodes (planets)
+-    reg_clauses = db.query(Clause).filter(Clause.document_id == assessment.regulation_doc_id).all()
++    reg_clauses = store.get_clauses_by_document(assessment.regulation_doc_id)
+     for rc in reg_clauses:
+         nodes.append({
+             "id": f"reg_{rc.id}",
+@@ -184,7 +185,7 @@ def get_graph_data(assessment_id: int, db: Session = Depends(get_db)):
+         
+     # Add customer nodes and edges
+     for r in results:
+-        cust_clause = db.query(Clause).get(r.customer_clause_id)
++        cust_clause = store.get_clause(r.customer_clause_id)
+         nodes.append({
+             "id": f"cust_{r.customer_clause_id}",
+             "label": cust_clause.clause_id if cust_clause else str(r.customer_clause_id),
+@@ -204,12 +205,12 @@ def get_graph_data(assessment_id: int, db: Session = Depends(get_db)):
+     return {"nodes": nodes, "edges": edges}
+ 
+ @app.get("/report/{assessment_id}")
+-def generate_report(assessment_id: int, db: Session = Depends(get_db)):
+-    assessment = db.query(Assessment).get(assessment_id)
++def generate_report(assessment_id: int):
++    assessment = store.get_assessment(assessment_id)
+     if not assessment:
+         raise HTTPException(status_code=404, detail="Assessment not found")
+     
+-    results = db.query(AssessmentResult).filter(AssessmentResult.assessment_id == assessment_id).all()
++    results = store.get_results_by_assessment(assessment_id)
+     
+     buffer = io.BytesIO()
+     doc = SimpleDocTemplate(buffer, pagesize=letter)
+@@ -220,19 +221,18 @@ def generate_report(assessment_id: int, db: Session = Depends(get_db)):
+     elements.append(Spacer(1, 12))
+     
+     # Header info
+-    customer_doc = db.query(Document).get(assessment.customer_doc_id)
+-    reg_doc = db.query(Document).get(assessment.regulation_doc_id)
++    customer_doc = store.get_document(assessment.customer_doc_id)
++    reg_doc = store.get_document(assessment.regulation_doc_id)
+     
+-    elements.append(Paragraph(f"Customer Document: {customer_doc.filename}", styles['Normal']))
+-    elements.append(Paragraph(f"Regulation Document: {reg_doc.filename}", styles['Normal']))
++    elements.append(Paragraph(f"Customer Document: {customer_doc.filename if customer_doc else 'N/A'}", styles['Normal']))
++    elements.append(Paragraph(f"Regulation Document: {reg_doc.filename if reg_doc else 'N/A'}", styles['Normal']))
+     elements.append(Paragraph(f"Date: {assessment.created_at.strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
+     elements.append(Spacer(1, 24))
+     
+     # Table data
+     data = [["Clause ID", "Status", "Risk", "Reasoning"]]
+     for r in results:
+-        cust_clause = db.query(Clause).get(r.customer_clause_id)
+-        # Truncate reasoning for table
++        cust_clause = store.get_clause(r.customer_clause_id)
+         reasoning = r.reasoning
+         data.append([
+             cust_clause.clause_id if cust_clause else f"Clause {r.customer_clause_id}",
+diff --git a/backend/models.py b/backend/models.py
+index 6a96a05..6d18e91 100644
+--- a/backend/models.py
++++ b/backend/models.py
+@@ -1,54 +1,174 @@
+-from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey, Float, DateTime
+-from sqlalchemy.ext.declarative import declarative_base
+-from sqlalchemy.orm import relationship, sessionmaker
+-import datetime
+-
+-Base = declarative_base()
+-
+-class Document(Base):
+-    __tablename__ = 'documents'
+-    id = Column(Integer, primary_key=True)
+-    filename = Column(String)
+-    file_type = Column(String) # 'regulation' or 'customer'
+-    version = Column(String)
+-    uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
+-    clauses = relationship("Clause", back_populates="document")
+-
+-class Clause(Base):
+-    __tablename__ = 'clauses'
+-    id = Column(Integer, primary_key=True)
+-    document_id = Column(Integer, ForeignKey('documents.id'))
+-    clause_id = Column(String) # e.g., "A.5.1"
+-    text = Column(Text)
+-    page_number = Column(Integer)
+-    severity = Column(String) # "MUST", "SHOULD", etc.
+-    vector_index = Column(Integer) # Index in FAISS
+-    document = relationship("Document", back_populates="clauses")
+-
+-class Assessment(Base):
+-    __tablename__ = 'assessments'
+-    id = Column(Integer, primary_key=True)
+-    customer_doc_id = Column(Integer, ForeignKey('documents.id'))
+-    regulation_doc_id = Column(Integer, ForeignKey('documents.id'))
+-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+-    results = relationship("AssessmentResult", back_populates="assessment")
+-
+-class AssessmentResult(Base):
+-    __tablename__ = 'assessment_results'
+-    id = Column(Integer, primary_key=True)
+-    assessment_id = Column(Integer, ForeignKey('assessments.id'))
+-    customer_clause_id = Column(Integer, ForeignKey('clauses.id'))
+-    regulation_clause_id = Column(Integer, ForeignKey('clauses.id'))
+-    status = Column(String) # "COMPLIANT", "PARTIAL", "NON_COMPLIANT"
+-    risk = Column(String) # "HIGH", "MEDIUM", "LOW"
+-    reasoning = Column(Text)
+-    evidence_text = Column(Text) # Literal text from doc
+-    confidence = Column(Float)
+-    assessment = relationship("Assessment", back_populates="results")
+-
+-DATABASE_URL = "sqlite:///./backend/data/compliance.db"
+-engine = create_engine(DATABASE_URL)
+-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+-
+-def init_db():
+-    Base.metadata.create_all(bind=engine)
++"""
++In-memory data store for temporary document storage.
++Data is cleared when the server restarts.
++"""
++from datetime import datetime
++from typing import Dict, List, Optional
++from dataclasses import dataclass, field
++
++
++@dataclass
++class Document:
++    id: int
++    filename: str
++    file_type: str  # 'regulation' or 'customer'
++    version: str
++    uploaded_at: datetime = field(default_factory=datetime.utcnow)
++
++
++@dataclass
++class Clause:
++    id: int
++    document_id: int
++    clause_id: str  # e.g., "A.5.1"
++    text: str
++    page_number: int
++    severity: str  # "MUST", "SHOULD", etc.
++
++
++@dataclass
++class Assessment:
++    id: int
++    customer_doc_id: int
++    regulation_doc_id: int
++    created_at: datetime = field(default_factory=datetime.utcnow)
++
++
++@dataclass
++class AssessmentResult:
++    id: int
++    assessment_id: int
++    customer_clause_id: int
++    regulation_clause_id: int
++    status: str  # "COMPLIANT", "PARTIAL", "NON_COMPLIANT"
++    risk: str  # "HIGH", "MEDIUM", "LOW"
++    reasoning: str
++    evidence_text: str
++    confidence: float
++
++
++class InMemoryStore:
++    """Thread-safe in-memory data store."""
++    
++    def __init__(self):
++        self.reset()
++    
++    def reset(self):
++        """Clear all data."""
++        self.documents: Dict[int, Document] = {}
++        self.clauses: Dict[int, Clause] = {}
++        self.assessments: Dict[int, Assessment] = {}
++        self.assessment_results: Dict[int, AssessmentResult] = {}
++        self._doc_counter = 0
++        self._clause_counter = 0
++        self._assessment_counter = 0
++        self._result_counter = 0
++    
++    # Document operations
++    def add_document(self, filename: str, file_type: str, version: str = "1.0") -> Document:
++        self._doc_counter += 1
++        doc = Document(
++            id=self._doc_counter,
++            filename=filename,
++            file_type=file_type,
++            version=version
++        )
++        self.documents[doc.id] = doc
++        return doc
++    
++    def get_document(self, doc_id: int) -> Optional[Document]:
++        return self.documents.get(doc_id)
++    
++    def get_all_documents(self) -> List[Document]:
++        return list(self.documents.values())
++    
++    def delete_document(self, doc_id: int) -> bool:
++        if doc_id not in self.documents:
++            return False
++        del self.documents[doc_id]
++        # Delete related clauses
++        clause_ids_to_delete = [c.id for c in self.clauses.values() if c.document_id == doc_id]
++        for cid in clause_ids_to_delete:
++            del self.clauses[cid]
++        return True
++    
++    # Clause operations
++    def add_clause(self, document_id: int, clause_id: str, text: str, 
++                   page_number: int, severity: str) -> Clause:
++        self._clause_counter += 1
++        clause = Clause(
++            id=self._clause_counter,
++            document_id=document_id,
++            clause_id=clause_id,
++            text=text,
++            page_number=page_number,
++            severity=severity
++        )
++        self.clauses[clause.id] = clause
++        return clause
++    
++    def get_clause(self, clause_id: int) -> Optional[Clause]:
++        return self.clauses.get(clause_id)
++    
++    def get_clauses_by_document(self, doc_id: int) -> List[Clause]:
++        return [c for c in self.clauses.values() if c.document_id == doc_id]
++    
++    def get_clause_by_doc_and_clause_id(self, doc_id: int, clause_id_str: str) -> Optional[Clause]:
++        for c in self.clauses.values():
++            if c.document_id == doc_id and c.clause_id == clause_id_str:
++                return c
++        return None
++    
++    # Assessment operations
++    def add_assessment(self, customer_doc_id: int, regulation_doc_id: int) -> Assessment:
++        self._assessment_counter += 1
++        assessment = Assessment(
++            id=self._assessment_counter,
++            customer_doc_id=customer_doc_id,
++            regulation_doc_id=regulation_doc_id
++        )
++        self.assessments[assessment.id] = assessment
++        return assessment
++    
++    def get_assessment(self, assessment_id: int) -> Optional[Assessment]:
++        return self.assessments.get(assessment_id)
++    
++    def get_assessments_by_doc(self, doc_id: int) -> List[Assessment]:
++        return [a for a in self.assessments.values() 
++                if a.customer_doc_id == doc_id or a.regulation_doc_id == doc_id]
++    
++    # Assessment result operations
++    def add_result(self, assessment_id: int, customer_clause_id: int, 
++                   regulation_clause_id: int, status: str, risk: str,
++                   reasoning: str, evidence_text: str, confidence: float) -> AssessmentResult:
++        self._result_counter += 1
++        result = AssessmentResult(
++            id=self._result_counter,
++            assessment_id=assessment_id,
++            customer_clause_id=customer_clause_id,
++            regulation_clause_id=regulation_clause_id,
++            status=status,
++            risk=risk,
++            reasoning=reasoning,
++            evidence_text=evidence_text,
++            confidence=confidence
++        )
++        self.assessment_results[result.id] = result
++        return result
++    
++    def get_results_by_assessment(self, assessment_id: int) -> List[AssessmentResult]:
++        return [r for r in self.assessment_results.values() if r.assessment_id == assessment_id]
++    
++    def delete_results_by_assessment(self, assessment_id: int):
++        result_ids = [r.id for r in self.assessment_results.values() if r.assessment_id == assessment_id]
++        for rid in result_ids:
++            del self.assessment_results[rid]
++    
++    def delete_assessment(self, assessment_id: int):
++        self.delete_results_by_assessment(assessment_id)
++        if assessment_id in self.assessments:
++            del self.assessments[assessment_id]
++
++
++# Global in-memory store instance
++store = InMemoryStore()
+diff --git a/backend/rag.py b/backend/rag.py
+index d17474c..a5e741a 100644
+--- a/backend/rag.py
++++ b/backend/rag.py
+@@ -1,10 +1,8 @@
+ import os
+-import json
+ from typing import List, Dict
+ from dotenv import load_dotenv
+ from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+ from langchain_community.vectorstores import FAISS
+-from langchain.text_splitter import RecursiveCharacterTextSplitter
+ from langchain.prompts import ChatPromptTemplate
+ from langchain_core.output_parsers import JsonOutputParser
+ 
+@@ -14,28 +12,44 @@ load_dotenv()
+ class RAGEngine:
+     def __init__(self):
+         self.embeddings = OpenAIEmbeddings()
+-        self.vector_db_path = "backend/data/faiss_index"
+         self.llm = ChatOpenAI(model="gpt-4-turbo-preview", temperature=0)
++        self.vector_store = None  # In-memory only, no persistence
+ 
+     def ingest_documents(self, clauses: List[Dict]):
++        """Ingest documents into in-memory FAISS index."""
++        if not clauses:
++            return None
++            
+         texts = [c['text'] for c in clauses]
+         metadatas = [
+-            {"clause_id": c['clause_id'], "doc_id": c['doc_id'], "page_number": c.get('page_number', 1)} 
++            {
++                "clause_id": c['clause_id'], 
++                "doc_id": c['doc_id'],
++                "doc_name": c.get('doc_name', 'Unknown'),  # Include document filename
++                "page_number": c.get('page_number', 1)
++            } 
+             for c in clauses
+         ]
+         
+-        vector_store = FAISS.from_texts(texts, self.embeddings, metadatas=metadatas)
+-        vector_store.save_local(self.vector_db_path)
+-        return vector_store
++        if self.vector_store is None:
++            # Create new index
++            self.vector_store = FAISS.from_texts(texts, self.embeddings, metadatas=metadatas)
++        else:
++            # Add to existing index
++            self.vector_store.add_texts(texts, metadatas=metadatas)
++        
++        return self.vector_store
++
++    def clear_index(self):
++        """Clear the in-memory FAISS index."""
++        self.vector_store = None
+ 
+     def retrieve_similar_clauses(self, query_text: str, top_k: int = 5, doc_id: int = None):
+-        if not os.path.exists(self.vector_db_path):
++        if self.vector_store is None:
+             return []
+-        vector_store = FAISS.load_local(self.vector_db_path, self.embeddings, allow_dangerous_deserialization=True)
+-        
++            
+         # We increase k because we might filter out some documents
+-        # For a truly robust solution, we'd use the vector store's native filter if supported
+-        docs_with_scores = vector_store.similarity_search_with_score(query_text, k=top_k * 2)
++        docs_with_scores = self.vector_store.similarity_search_with_score(query_text, k=top_k * 2)
+         
+         if doc_id:
+             filtered_docs = [
+@@ -83,10 +97,19 @@ class RAGEngine:
+ 
+     def answer_general_question(self, query: str, context: str):
+         prompt = ChatPromptTemplate.from_messages([
+-            ("system", """You are a helpful compliance assistant. 
+-            Answer the user's question accurately based ONLY on the provided document context.
+-            If the context doesn't contain the answer, say you don't know based on these documents.
+-            Always cite the Source/Page number if available in the context.
++            ("system", """You are a helpful compliance assistant with multilingual capabilities. 
++            Answer the user's question accurately based ON THE PROVIDED document context.
++            
++            CITATION STYLE (IMPORTANT):
++            1. Use numerical citations in your text, e.g., "The network must support 10kV [1]."
++            2. At the very end of your response, list your sources in a "SOURCES" section.
++            3. Each source should look like: "[1] File: filename.pdf | Clause: A.1 | Page: 5"
++            4. This keeps the main response clean while providing full traceability at the bottom.
++            
++            MULTILINGUAL RULES:
++            1. If the document context is in a language other than the user's query, translate the relevant information automatically.
++            2. Even if the context is technical (numbers, section titles), explain what those sections represent.
++            3. NEVER say "no information available in English" if there is information in ANY language. Translate it!
+             
+             Context:
+             {context}"""),
+diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+index bcd1aee..e6c16db 100644
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -3,6 +3,7 @@ import axios from 'axios';
+ import ThreeScene from './components/ThreeScene';
+ import Sidebar from './components/Sidebar';
+ import ChatDialog from './components/ChatDialog';
++import { Layout, MessageSquare } from 'lucide-react';
+ 
+ const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+ 
+@@ -11,12 +12,13 @@ function App() {
+   const [selectedNode, setSelectedNode] = useState(null);
+   const [loading, setLoading] = useState(false);
+   const [assessmentId, setAssessmentId] = useState(null);
++  const [mode, setMode] = useState('graph'); // 'graph' | 'chat'
+ 
+   const handleAssessmentComplete = async (assessmentId) => {
+     if (!assessmentId) {
+       setGraphData(null);
+       setSelectedNode(null);
+-      setLoading(false); // Ensure loading stops
++      setLoading(false);
+       return;
+     }
+ 
+@@ -33,8 +35,9 @@ function App() {
+ 
+   const handleStartAnalysis = () => {
+     setLoading(true);
+-    setGraphData(null); // Clear old graph to show spinner properly
++    setGraphData(null);
+     setSelectedNode(null);
++    setMode('graph'); // Switch to graph mode when analysis starts
+   };
+ 
+   const handleNodeClick = (node) => {
+@@ -48,39 +51,123 @@ function App() {
+         onStartAnalysis={handleStartAnalysis}
+         selectedNode={selectedNode}
+         assessmentId={assessmentId}
++        mode={mode}
+       />
+ 
+-      <main style={{ flex: 1, position: 'relative' }}>
+-        <ThreeScene
+-          graphData={graphData}
+-          onNodeClick={handleNodeClick}
+-          selectedNode={selectedNode}
+-          loading={loading}
+-        />
+-
+-        {/* Chat Dialog */}
+-        <ChatDialog />
++      <main style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
++        {/* Top Navigation Mode Switcher */}
++        <div style={{
++          padding: '12px 24px',
++          background: 'rgba(20, 20, 25, 0.8)',
++          backdropFilter: 'blur(10px)',
++          borderBottom: '1px solid rgba(255,255,255,0.05)',
++          display: 'flex',
++          justifyContent: 'center',
++          gap: '20px',
++          zIndex: 10
++        }}>
++          <button
++            onClick={() => setMode('graph')}
++            style={{
++              background: mode === 'graph' ? 'rgba(168, 85, 247, 0.2)' : 'transparent',
++              border: '1px solid',
++              borderColor: mode === 'graph' ? '#a855f7' : 'rgba(255,255,255,0.1)',
++              color: mode === 'graph' ? '#a855f7' : 'rgba(255,255,255,0.5)',
++              padding: '8px 16px',
++              borderRadius: '8px',
++              cursor: 'pointer',
++              display: 'flex',
++              alignItems: 'center',
++              gap: '8px',
++              fontSize: '14px',
++              fontWeight: 600,
++              transition: 'all 0.2s'
++            }}
++          >
++            <Layout size={18} /> GRAPH MODE
++          </button>
++          <button
++            onClick={() => setMode('chat')}
++            style={{
++              background: mode === 'chat' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
++              border: '1px solid',
++              borderColor: mode === 'chat' ? '#6366f1' : 'rgba(255,255,255,0.1)',
++              color: mode === 'chat' ? '#6366f1' : 'rgba(255,255,255,0.5)',
++              padding: '8px 16px',
++              borderRadius: '8px',
++              cursor: 'pointer',
++              display: 'flex',
++              alignItems: 'center',
++              gap: '8px',
++              fontSize: '14px',
++              fontWeight: 600,
++              transition: 'all 0.2s'
++            }}
++          >
++            <MessageSquare size={18} /> CHAT MODE
++          </button>
++        </div>
+ 
+-        {!graphData && !loading && (
+-          <div style={{
+-            position: 'absolute',
+-            top: '50%',
+-            left: '50%',
+-            transform: 'translate(-50%, -50%)',
+-            textAlign: 'center',
+-            opacity: 0.5,
+-            pointerEvents: 'none'
+-          }}>
+-            <h2 style={{ fontSize: '32px', marginBottom: '8px' }}>Compliance Galaxy</h2>
+-            <p>Upload documents and run analysis to visualize compliance relationships.</p>
+-          </div>
+-        )}
++        <div style={{ flex: 1, position: 'relative' }}>
++          {mode === 'graph' ? (
++            <>
++              <ThreeScene
++                graphData={graphData}
++                onNodeClick={handleNodeClick}
++                selectedNode={selectedNode}
++                loading={loading}
++              />
++              {!graphData && !loading && (
++                <div style={{
++                  position: 'absolute',
++                  top: '50%',
++                  left: '50%',
++                  transform: 'translate(-50%, -50%)',
++                  textAlign: 'center',
++                  opacity: 0.5,
++                  pointerEvents: 'none'
++                }}>
++                  <h2 style={{ fontSize: '32px', marginBottom: '8px' }}>Compliance Galaxy</h2>
++                  <p>Upload documents and run analysis to visualize compliance relationships.</p>
++                </div>
++              )}
++              {/* Floating Chat in Graph Mode */}
++              <ChatDialog />
++            </>
++          ) : (
++            <div style={{ width: '100%', height: '100%', padding: '40px', display: 'flex', justifyContent: 'center' }}>
++              <ChatDialog isFullScreen={true} />
++            </div>
++          )}
++        </div>
+       </main>
+ 
+       <style>{`
+         @keyframes spin {
+           to { transform: rotate(360deg); }
+         }
++        .btn-primary {
++          background: linear-gradient(135deg, #a855f7 0%, #6366f1 100%);
++          border: none;
++          color: white;
++          border-radius: 8px;
++          cursor: pointer;
++          font-weight: 600;
++          transition: transform 0.2s, opacity 0.2s;
++        }
++        .btn-primary:hover {
++          transform: translateY(-2px);
++          opacity: 0.9;
++        }
++        .btn-primary:active {
++          transform: translateY(0);
++        }
++        .glass-panel {
++          background: rgba(255, 255, 255, 0.03);
++          backdrop-filter: blur(10px);
++          border: 1px solid rgba(255, 255, 255, 0.1);
++          border-radius: 12px;
++        }
+       `}</style>
+     </div>
+   );
+diff --git a/frontend/src/components/ChatDialog.jsx b/frontend/src/components/ChatDialog.jsx
+index aeed2c5..50057e3 100644
+--- a/frontend/src/components/ChatDialog.jsx
++++ b/frontend/src/components/ChatDialog.jsx
+@@ -1,11 +1,11 @@
+ import React, { useState, useRef, useEffect } from 'react';
+-import { MessageSquare, Send, X, Bot, User } from 'lucide-react';
++import { MessageSquare, Send, X, Bot, User, Maximize2, Minimize2 } from 'lucide-react';
+ import { motion, AnimatePresence } from 'framer-motion';
+ import axios from 'axios';
+ 
+ const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+ 
+-const ChatDialog = () => {
++const ChatDialog = ({ isFullScreen = false }) => {
+     const [isOpen, setIsOpen] = useState(false);
+     const [messages, setMessages] = useState([]);
+     const [input, setInput] = useState('');
+@@ -39,34 +39,242 @@ const ChatDialog = () => {
+         }
+     };
+ 
++    const containerStyle = isFullScreen ? {
++        width: '100%',
++        maxWidth: '1000px',
++        height: '100%',
++        maxHeight: '800px',
++        background: 'rgba(20, 20, 25, 0.95)',
++        backdropFilter: 'blur(12px)',
++        border: '1px solid rgba(255, 255, 255, 0.1)',
++        borderRadius: '24px',
++        display: 'flex',
++        flexDirection: 'column',
++        boxShadow: '0 40px 80px rgba(0,0,0,0.6)',
++        overflow: 'hidden',
++        position: 'relative'
++    } : {
++        position: 'fixed',
++        bottom: '100px',
++        right: '24px',
++        width: '400px',
++        height: '500px',
++        background: 'rgba(20, 20, 25, 0.95)',
++        backdropFilter: 'blur(12px)',
++        border: '1px solid rgba(255, 255, 255, 0.1)',
++        borderRadius: '16px',
++        display: 'flex',
++        flexDirection: 'column',
++        boxShadow: '0 24px 48px rgba(0,0,0,0.5)',
++        zIndex: 101,
++        overflow: 'hidden'
++    };
++
++    const chatContent = (
++        <div style={containerStyle}>
++            {/* Header */}
++            <div style={{
++                padding: isFullScreen ? '24px' : '16px',
++                background: 'rgba(255,255,255,0.05)',
++                borderBottom: '1px solid rgba(255,255,255,0.1)',
++                display: 'flex',
++                justifyContent: 'space-between',
++                alignItems: 'center'
++            }}>
++                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
++                    <div style={{
++                        width: '10px',
++                        height: '10px',
++                        borderRadius: '50%',
++                        background: '#10b981',
++                        boxShadow: '0 0 10px #10b981'
++                    }}></div>
++                    <span style={{ fontWeight: 'bold', fontSize: isFullScreen ? '18px' : '14px' }}>
++                        Compliance Intelligence Analyst
++                    </span>
++                </div>
++                {!isFullScreen && (
++                    <button onClick={() => setIsOpen(false)} style={{ background: 'transparent', border: 'none', color: 'white', opacity: 0.5, cursor: 'pointer' }}>
++                        <X size={20} />
++                    </button>
++                )}
++            </div>
++
++            {/* Messages */}
++            <div ref={scrollRef} style={{
++                flex: 1,
++                padding: isFullScreen ? '32px' : '16px',
++                overflowY: 'auto',
++                display: 'flex',
++                flexDirection: 'column',
++                gap: '16px'
++            }}>
++                {messages.length === 0 && (
++                    <div style={{ opacity: 0.4, textAlign: 'center', marginTop: isFullScreen ? '100px' : '40px' }}>
++                        <Bot size={isFullScreen ? 64 : 40} style={{ margin: '0 auto 16px', color: '#6366f1' }} />
++                        <h3 style={{ fontSize: isFullScreen ? '24px' : '18px', marginBottom: '8px' }}>Multilingual Compliance Chat</h3>
++                        <p style={{ fontSize: isFullScreen ? '16px' : '14px' }}>
++                            Ask questions regarding your uploaded PDFs and DOCX files.<br />
++                            I can automatically translate and summarize documents in multiple languages.
++                        </p>
++                    </div>
++                )}
++                {messages.map((m, idx) => (
++                    <motion.div
++                        initial={{ opacity: 0, y: 10 }}
++                        animate={{ opacity: 1, y: 0 }}
++                        key={idx}
++                        style={{
++                            alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
++                            maxWidth: '85%',
++                            padding: isFullScreen ? '16px 20px' : '10px 14px',
++                            borderRadius: m.role === 'user' ? '16px 16px 0 16px' : '16px 16px 16px 0',
++                            background: m.role === 'user' ? 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)' : 'rgba(255,255,255,0.08)',
++                            color: 'white',
++                            fontSize: isFullScreen ? '16px' : '14px',
++                            lineHeight: 1.6,
++                            boxShadow: m.role === 'user' ? '0 4px 12px rgba(99, 102, 241, 0.3)' : 'none'
++                        }}
++                    >
++                        {m.content}
++                    </motion.div>
++                ))}
++                {loading && (
++                    <div style={{ alignSelf: 'flex-start', padding: '12px 18px', borderRadius: '16px 16px 16px 0', background: 'rgba(255,255,255,0.08)' }}>
++                        <div className="dot-flashing"></div>
++                    </div>
++                )}
++            </div>
++
++            {/* Input */}
++            <div style={{ padding: isFullScreen ? '32px' : '16px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
++                <div style={{
++                    display: 'flex',
++                    gap: '12px',
++                    background: 'rgba(255,255,255,0.05)',
++                    padding: isFullScreen ? '12px 20px' : '10px 14px',
++                    borderRadius: '12px',
++                    border: '1px solid rgba(255,255,255,0.1)'
++                }}>
++                    <input
++                        value={input}
++                        onChange={(e) => setInput(e.target.value)}
++                        onKeyDown={(e) => e.key === 'Enter' && handleSend()}
++                        placeholder="Type your question here... (Multilingual supported)"
++                        style={{
++                            flex: 1,
++                            background: 'transparent',
++                            border: 'none',
++                            color: 'white',
++                            outline: 'none',
++                            fontSize: isFullScreen ? '16px' : '14px'
++                        }}
++                    />
++                    <button
++                        onClick={handleSend}
++                        disabled={loading}
++                        style={{
++                            background: '#6366f1',
++                            border: 'none',
++                            color: 'white',
++                            cursor: 'pointer',
++                            opacity: loading ? 0.5 : 1,
++                            padding: '8px',
++                            borderRadius: '8px',
++                            display: 'flex',
++                            alignItems: 'center',
++                            justifyContent: 'center'
++                        }}
++                    >
++                        <Send size={isFullScreen ? 20 : 18} />
++                    </button>
++                </div>
++                {isFullScreen && (
++                    <p style={{ marginTop: '12px', fontSize: '12px', opacity: 0.4, textAlign: 'center' }}>
++                        I use RAG to analyze your specific documents. All answers are based on the knowledge base you've uploaded.
++                    </p>
++                )}
++            </div>
++
++            <style jsx="true">{`
++                .dot-flashing {
++                    position: relative;
++                    width: 6px;
++                    height: 6px;
++                    border-radius: 5px;
++                    background-color: #6366f1;
++                    color: #6366f1;
++                    animation: dot-flashing 1s infinite linear alternate;
++                    animation-delay: .5s;
++                }
++                .dot-flashing::before, .dot-flashing::after {
++                    content: '';
++                    display: inline-block;
++                    position: absolute;
++                    top: 0;
++                }
++                .dot-flashing::before {
++                    left: -12px;
++                    width: 6px;
++                    height: 6px;
++                    border-radius: 5px;
++                    background-color: #6366f1;
++                    color: #6366f1;
++                    animation: dot-flashing 1s infinite alternate;
++                    animation-delay: 0s;
++                }
++                .dot-flashing::after {
++                    left: 12px;
++                    width: 6px;
++                    height: 6px;
++                    border-radius: 5px;
++                    background-color: #6366f1;
++                    color: #6366f1;
++                    animation: dot-flashing 1s infinite alternate;
++                    animation-delay: 1s;
++                }
++                @keyframes dot-flashing {
++                    0% { background-color: #6366f1; }
++                    50%, 100% { background-color: rgba(99, 102, 241, 0.2); }
++                }
++            `}</style>
++        </div>
++    );
++
++    if (isFullScreen) {
++        return chatContent;
++    }
++
+     return (
+         <>
+             {/* Floating Toggle Button */}
+-            <button
+-                onClick={() => setIsOpen(true)}
+-                style={{
+-                    position: 'fixed',
+-                    bottom: '24px',
+-                    right: '24px',
+-                    width: '60px',
+-                    height: '60px',
+-                    borderRadius: '50%',
+-                    background: 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)',
+-                    color: 'white',
+-                    display: 'flex',
+-                    alignItems: 'center',
+-                    justifyContent: 'center',
+-                    boxShadow: '0 8px 24px rgba(168, 85, 247, 0.4)',
+-                    cursor: 'pointer',
+-                    border: 'none',
+-                    zIndex: 100,
+-                    transition: 'transform 0.2s'
+-                }}
+-                onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
+-                onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+-            >
+-                <MessageSquare size={28} />
+-            </button>
++            {!isOpen && (
++                <button
++                    onClick={() => setIsOpen(true)}
++                    style={{
++                        position: 'fixed',
++                        bottom: '24px',
++                        right: '24px',
++                        width: '60px',
++                        height: '60px',
++                        borderRadius: '50%',
++                        background: 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)',
++                        color: 'white',
++                        display: 'flex',
++                        alignItems: 'center',
++                        justifyContent: 'center',
++                        boxShadow: '0 8px 24px rgba(168, 85, 247, 0.4)',
++                        cursor: 'pointer',
++                        border: 'none',
++                        zIndex: 100,
++                        transition: 'transform 0.2s'
++                    }}
++                    onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
++                    onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
++                >
++                    <MessageSquare size={28} />
++                </button>
++            )}
+ 
+             <AnimatePresence>
+                 {isOpen && (
+@@ -74,121 +282,9 @@ const ChatDialog = () => {
+                         initial={{ opacity: 0, y: 20, scale: 0.9 }}
+                         animate={{ opacity: 1, y: 0, scale: 1 }}
+                         exit={{ opacity: 0, y: 20, scale: 0.9 }}
+-                        style={{
+-                            position: 'fixed',
+-                            bottom: '100px',
+-                            right: '24px',
+-                            width: '400px',
+-                            height: '500px',
+-                            background: 'rgba(20, 20, 25, 0.95)',
+-                            backdropFilter: 'blur(12px)',
+-                            border: '1px solid rgba(255, 255, 255, 0.1)',
+-                            borderRadius: '16px',
+-                            display: 'flex',
+-                            flexDirection: 'column',
+-                            boxShadow: '0 24px 48px rgba(0,0,0,0.5)',
+-                            zIndex: 101,
+-                            overflow: 'hidden'
+-                        }}
++                        style={{ position: 'fixed', bottom: '100px', right: '24px', zIndex: 101 }}
+                     >
+-                        {/* Header */}
+-                        <div style={{ padding: '16px', background: 'rgba(255,255,255,0.05)', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+-                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+-                                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }}></div>
+-                                <span style={{ fontWeight: 'bold' }}>AI Compliance Assistant</span>
+-                            </div>
+-                            <button onClick={() => setIsOpen(false)} style={{ background: 'transparent', border: 'none', color: 'white', opacity: 0.5, cursor: 'pointer' }}>
+-                                <X size={20} />
+-                            </button>
+-                        </div>
+-
+-                        {/* Messages */}
+-                        <div ref={scrollRef} style={{ flex: 1, padding: '16px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+-                            {messages.length === 0 && (
+-                                <div style={{ opacity: 0.4, textAlign: 'center', marginTop: '40px' }}>
+-                                    <Bot size={40} style={{ margin: '0 auto 10px' }} />
+-                                    <p>Ask me anything about your compliance documents!</p>
+-                                </div>
+-                            )}
+-                            {messages.map((m, idx) => (
+-                                <div key={idx} style={{
+-                                    alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+-                                    maxWidth: '85%',
+-                                    padding: '10px 14px',
+-                                    borderRadius: '12px',
+-                                    background: m.role === 'user' ? '#6366f1' : 'rgba(255,255,255,0.08)',
+-                                    color: 'white',
+-                                    fontSize: '14px',
+-                                    lineHeight: 1.5
+-                                }}>
+-                                    {m.content}
+-                                </div>
+-                            ))}
+-                            {loading && (
+-                                <div style={{ alignSelf: 'flex-start', padding: '10px 14px', borderRadius: '12px', background: 'rgba(255,255,255,0.08)' }}>
+-                                    <div className="dot-flashing"></div>
+-                                </div>
+-                            )}
+-                        </div>
+-
+-                        {/* Input */}
+-                        <div style={{ padding: '16px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+-                            <div style={{ display: 'flex', gap: '10px', background: 'rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: '8px' }}>
+-                                <input
+-                                    value={input}
+-                                    onChange={(e) => setInput(e.target.value)}
+-                                    onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+-                                    placeholder="Ask a question..."
+-                                    style={{ flex: 1, background: 'transparent', border: 'none', color: 'white', outline: 'none', fontSize: '14px' }}
+-                                />
+-                                <button onClick={handleSend} disabled={loading} style={{ background: 'transparent', border: 'none', color: '#6366f1', cursor: 'pointer', opacity: loading ? 0.5 : 1 }}>
+-                                    <Send size={18} />
+-                                </button>
+-                            </div>
+-                        </div>
+-
+-                        <style jsx="true">{`
+-                            .dot-flashing {
+-                                position: relative;
+-                                width: 6px;
+-                                height: 6px;
+-                                border-radius: 5px;
+-                                background-color: #6366f1;
+-                                color: #6366f1;
+-                                animation: dot-flashing 1s infinite linear alternate;
+-                                animation-delay: .5s;
+-                            }
+-                            .dot-flashing::before, .dot-flashing::after {
+-                                content: '';
+-                                display: inline-block;
+-                                position: absolute;
+-                                top: 0;
+-                            }
+-                            .dot-flashing::before {
+-                                left: -12px;
+-                                width: 6px;
+-                                height: 6px;
+-                                border-radius: 5px;
+-                                background-color: #6366f1;
+-                                color: #6366f1;
+-                                animation: dot-flashing 1s infinite alternate;
+-                                animation-delay: 0s;
+-                            }
+-                            .dot-flashing::after {
+-                                left: 12px;
+-                                width: 6px;
+-                                height: 6px;
+-                                border-radius: 5px;
+-                                background-color: #6366f1;
+-                                color: #6366f1;
+-                                animation: dot-flashing 1s infinite alternate;
+-                                animation-delay: 1s;
+-                            }
+-                            @keyframes dot-flashing {
+-                                0% { background-color: #6366f1; }
+-                                50%, 100% { background-color: rgba(99, 102, 241, 0.2); }
+-                            }
+-                        `}</style>
++                        {chatContent}
+                     </motion.div>
+                 )}
+             </AnimatePresence>
+diff --git a/frontend/src/components/Sidebar.jsx b/frontend/src/components/Sidebar.jsx
+index b8fcf17..a35a556 100644
+--- a/frontend/src/components/Sidebar.jsx
++++ b/frontend/src/components/Sidebar.jsx
+@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
+ 
+ const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+ 
+-const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessmentId }) => {
++const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessmentId, mode }) => {
+     const [files, setFiles] = useState([]);
+     const [uploading, setUploading] = useState(false);
+     const [uploadProgress, setUploadProgress] = useState(0);
+@@ -34,11 +34,10 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
+             await axios.delete(`${API_BASE}/documents/${id}`);
+             if (activeDoc.regulation === id) setActiveDoc(p => ({ ...p, regulation: null }));
+             if (activeDoc.customer === id) setActiveDoc(p => ({ ...p, customer: null }));
+-            // Refresh in background to stay in sync
+             fetchDocs();
+         } catch (e) {
+             alert("Delete failed");
+-            setFiles(originalFiles); // Rollback if failed
++            setFiles(originalFiles);
+         }
+     };
+ 
+@@ -48,7 +47,7 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
+             await axios.post(`${API_BASE}/reset`);
+             fetchDocs();
+             setActiveDoc({ regulation: null, customer: null });
+-            onAssessmentComplete(null); // Reset graph
++            onAssessmentComplete(null);
+         } catch (e) { alert("Reset failed"); }
+     };
+ 
+@@ -56,8 +55,9 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
+         const file = e.target.files[0];
+         if (!file) return;
+ 
+-        if (!file.name.toLowerCase().endsWith('.pdf')) {
+-            alert("Only PDF files are allowed.");
++        const fileName = file.name.toLowerCase();
++        if (!fileName.endsWith('.pdf') && !fileName.endsWith('.docx')) {
++            alert("Only PDF and DOCX files are allowed.");
+             return;
+         }
+ 
+@@ -90,7 +90,7 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
+             return;
+         }
+ 
+-        onStartAnalysis(); // Trigger loading state immediately in App.jsx
++        onStartAnalysis();
+ 
+         try {
+             const res = await axios.post(`${API_BASE}/assess?customer_doc_id=${activeDoc.customer}&regulation_doc_id=${activeDoc.regulation}`);
+@@ -101,6 +101,8 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
+         }
+     };
+ 
++    const isGraphMode = mode === 'graph';
++
+     return (
+         <div className="glass-panel" style={{ width: '400px', height: '100vh', padding: '24px', flexShrink: 0, overflowY: 'auto', borderRight: '1px solid rgba(255,255,255,0.1)', borderRadius: 0 }}>
+             <h1 style={{ fontSize: '24px', margin: '0 0 24px 0', background: 'linear-gradient(to right, #a855f7, #6366f1)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+@@ -109,18 +111,36 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
+ 
+             <section style={{ marginBottom: '32px' }}>
+                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', textTransform: 'uppercase', opacity: 0.6 }}>
+-                    <Upload size={16} /> Data Ingestion
++                    <Upload size={16} /> Documents
+                 </h3>
+-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
+-                    <label className="btn-primary" style={{ fontSize: '12px', textAlign: 'center', padding: '12px' }}>
+-                        REGULATION PDF
+-                        <input type="file" hidden accept=".pdf" onChange={(e) => handleUpload(e, 'regulation')} />
+-                    </label>
+-                    <label className="btn-primary" style={{ fontSize: '12px', textAlign: 'center', padding: '12px', background: '#3b82f6' }}>
+-                        CUSTOMER PDF
+-                        <input type="file" hidden accept=".pdf" onChange={(e) => handleUpload(e, 'customer')} />
+-                    </label>
+-                </div>
++                {isGraphMode ? (
++                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
++                        <label className="btn-primary" style={{ fontSize: '11px', textAlign: 'center', padding: '12px' }}>
++                            REGULATION DOC
++                            <input type="file" hidden accept=".pdf,.docx" onChange={(e) => handleUpload(e, 'regulation')} />
++                        </label>
++                        <label className="btn-primary" style={{ fontSize: '11px', textAlign: 'center', padding: '12px', background: '#3b82f6' }}>
++                            CUSTOMER DOC
++                            <input type="file" hidden accept=".pdf,.docx" onChange={(e) => handleUpload(e, 'customer')} />
++                        </label>
++                    </div>
++                ) : (
++                    <div style={{ marginTop: '12px' }}>
++                        <label className="btn-primary" style={{
++                            width: '100%',
++                            fontSize: '14px',
++                            textAlign: 'center',
++                            padding: '16px',
++                            display: 'flex',
++                            alignItems: 'center',
++                            justifyContent: 'center',
++                            boxSizing: 'border-box'
++                        }}>
++                            UPLOAD NEW DOCUMENT
++                            <input type="file" hidden accept=".pdf,.docx" onChange={(e) => handleUpload(e, 'customer')} />
++                        </label>
++                    </div>
++                )}
+             </section>
+ 
+             <section style={{ marginBottom: '32px' }}>
+@@ -158,17 +178,17 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
+                     {files.map(f => (
+                         <div
+                             key={f.id}
+-                            onClick={() => setActiveDoc(prev => ({ ...prev, [f.file_type]: f.id }))}
++                            onClick={() => isGraphMode && setActiveDoc(prev => ({ ...prev, [f.file_type]: f.id }))}
+                             style={{
+                                 padding: '12px',
+                                 borderRadius: '8px',
+-                                background: activeDoc[f.file_type] === f.id
++                                background: isGraphMode && activeDoc[f.file_type] === f.id
+                                     ? (f.file_type === 'regulation' ? 'linear-gradient(135deg, rgba(99, 102, 241, 0.3) 0%, rgba(168, 85, 247, 0.3) 100%)' : 'rgba(59, 130, 246, 0.3)')
+                                     : 'rgba(255,255,255,0.05)',
+-                                border: `1px solid ${activeDoc[f.file_type] === f.id
++                                border: `1px solid ${isGraphMode && activeDoc[f.file_type] === f.id
+                                     ? (f.file_type === 'regulation' ? '#a855f7' : '#3b82f6')
+-                                    : 'transparent'}`,
+-                                cursor: 'pointer',
++                                    : 'rgba(255,255,255,0.05)'}`,
++                                cursor: isGraphMode ? 'pointer' : 'default',
+                                 display: 'flex',
+                                 alignItems: 'center',
+                                 gap: '12px',
+@@ -178,7 +198,7 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
+                             <FileText size={18} color={f.file_type === 'regulation' ? '#a855f7' : '#3b82f6'} />
+                             <div style={{ overflow: 'hidden', flex: 1 }}>
+                                 <div style={{ fontSize: '14px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.filename}</div>
+-                                <div style={{ fontSize: '11px', opacity: 0.5 }}>v{f.version} • {f.file_type}</div>
++                                <div style={{ fontSize: '11px', opacity: 0.5 }}>v{f.version} {isGraphMode ? `• ${f.file_type}` : ''}</div>
+                             </div>
+                             <button
+                                 onClick={(e) => handleDelete(e, f.id)}
+@@ -190,25 +210,36 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
+                             </button>
+                         </div>
+                     ))}
++                    {files.length === 0 && !uploading && (
++                        <div style={{ textAlign: 'center', padding: '20px', opacity: 0.3, border: '1px dashed rgba(255,255,255,0.1)', borderRadius: '8px' }}>
++                            No documents uploaded.
++                        </div>
++                    )}
+                 </div>
+-                <button
+-                    onClick={runAssessment}
+-                    disabled={!activeDoc.regulation || !activeDoc.customer}
+-                    className="btn-primary"
+-                    style={{
+-                        width: '100%',
+-                        marginTop: '16px',
+-                        padding: '14px',
+-                        background: (!activeDoc.regulation || !activeDoc.customer) ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)',
+-                        color: (!activeDoc.regulation || !activeDoc.customer) ? 'rgba(255,255,255,0.3)' : 'white'
+-                    }}
+-                >
+-                    {(!activeDoc.regulation && !activeDoc.customer)
+-                        ? "SELECT DOCUMENTS"
+-                        : (!activeDoc.regulation || !activeDoc.customer)
+-                            ? "SELECT REMAINING DOC"
+-                            : "ANALYZE (2 DOCS SELECTED)"}
+-                </button>
++
++                {isGraphMode ? (
++                    <>
++                        <button
++                            onClick={runAssessment}
++                            disabled={!activeDoc.regulation || !activeDoc.customer}
++                            className="btn-primary"
++                            style={{
++                                width: '100%',
++                                marginTop: '16px',
++                                padding: '14px',
++                                background: (!activeDoc.regulation || !activeDoc.customer) ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)',
++                                color: (!activeDoc.regulation || !activeDoc.customer) ? 'rgba(255,255,255,0.3)' : 'white'
++                            }}
++                        >
++                            {(!activeDoc.regulation && !activeDoc.customer)
++                                ? "SELECT DOCUMENTS"
++                                : (!activeDoc.regulation || !activeDoc.customer)
++                                    ? "SELECT REMAINING DOC"
++                                    : "ANALYZE (2 DOCS SELECTED)"}
++                        </button>
++                    </>
++                ) : null}
++
+                 <button
+                     onClick={handleReset}
+                     style={{ width: '100%', marginTop: '12px', padding: '10px', background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: '#ef4444', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}
+@@ -216,7 +247,7 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
+                     RESET ALL DATABASE
+                 </button>
+ 
+-                {assessmentId && (
++                {isGraphMode && assessmentId && (
+                     <button
+                         onClick={() => window.open(`${API_BASE}/report/${assessmentId}`, '_blank')}
+                         className="btn-primary"
+@@ -238,7 +269,7 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
+             </section>
+ 
+             <AnimatePresence>
+-                {selectedNode && (
++                {isGraphMode && selectedNode && (
+                     <motion.section
+                         initial={{ opacity: 0, y: 20 }}
+                         animate={{ opacity: 1, y: 0 }}
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index 7fb5fc9..3c2275e 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -1,3 +1,7 @@
++* {
++  box-sizing: border-box;
++}
++
+ :root {
+   font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+   line-height: 1.5;
+@@ -48,21 +52,32 @@ body {
+   box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+ }
+ 
+-.status-compliant { color: #10b981; }
+-.status-partial { color: #f59e0b; }
+-.status-non-compliant { color: #ef4444; }
++.status-compliant {
++  color: #10b981;
++}
++
++.status-partial {
++  color: #f59e0b;
++}
++
++.status-non-compliant {
++  color: #ef4444;
++}
+ 
+ /* Custom Scrollbar */
+ ::-webkit-scrollbar {
+   width: 6px;
+ }
++
+ ::-webkit-scrollbar-track {
+   background: transparent;
+ }
++
+ ::-webkit-scrollbar-thumb {
+   background: rgba(255, 255, 255, 0.1);
+   border-radius: 10px;
+ }
++
+ ::-webkit-scrollbar-thumb:hover {
+   background: rgba(255, 255, 255, 0.2);
+-}
++}
+\ No newline at end of file
+diff --git a/requirements.txt b/requirements.txt
+index 1670983..44360b5 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -9,3 +9,4 @@ faiss-cpu==1.13.2
+ python-dotenv==1.0.1
+ reportlab==4.4.9
+ python-multipart==0.0.20
++python-docx==1.1.2

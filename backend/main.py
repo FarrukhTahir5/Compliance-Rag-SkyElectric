@@ -83,6 +83,18 @@ def delete_document(doc_id: int):
     
     return {"message": "Document deleted"}
 
+@app.patch("/documents/{doc_id}/type")
+def update_document_type(doc_id: int, file_type: str = Form(...)):
+    doc = store.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    if file_type not in ["regulation", "customer"]:
+        raise HTTPException(status_code=400, detail="Invalid file type")
+    
+    doc.file_type = file_type
+    return {"message": "Document type updated", "file_type": file_type}
+
 @app.post("/reset")
 def reset_data():
     store.reset()
@@ -245,15 +257,15 @@ def generate_report(assessment_id: int):
     elements = []
     
     styles = getSampleStyleSheet()
-    elements.append(Paragraph(f"Compliance Assessment Report", styles['Title']))
+    elements.append(Paragraph(f"SkyCompliance™ Engineering Report", styles['Title']))
     elements.append(Spacer(1, 12))
     
     # Header info
     customer_doc = store.get_document(assessment.customer_doc_id)
     reg_doc = store.get_document(assessment.regulation_doc_id)
     
-    elements.append(Paragraph(f"Customer Document: {customer_doc.filename if customer_doc else 'N/A'}", styles['Normal']))
-    elements.append(Paragraph(f"Regulation Document: {reg_doc.filename if reg_doc else 'N/A'}", styles['Normal']))
+    elements.append(Paragraph(f"Project Document: {customer_doc.filename if customer_doc else 'N/A'}", styles['Normal']))
+    elements.append(Paragraph(f"Regulatory Standard: {reg_doc.filename if reg_doc else 'N/A'}", styles['Normal']))
     elements.append(Paragraph(f"Date: {assessment.created_at.strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
     elements.append(Spacer(1, 24))
     

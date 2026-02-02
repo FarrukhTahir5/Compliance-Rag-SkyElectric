@@ -127,8 +127,8 @@ function App() {
                   opacity: 0.5,
                   pointerEvents: 'none'
                 }}>
-                  <h2 style={{ fontSize: '32px', marginBottom: '8px' }}>Compliance Galaxy</h2>
-                  <p>Upload documents and run analysis to visualize compliance relationships.</p>
+                  <h2 style={{ fontSize: '32px', marginBottom: '8px', fontWeight: 800 }}>SkyCompliance</h2>
+                  <p>Accelerate your engineering workflow with AI-driven compliance intelligence.</p>
                 </div>
               )}
               {/* Floating Chat in Graph Mode */}
