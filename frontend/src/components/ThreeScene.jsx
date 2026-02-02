@@ -193,22 +193,46 @@ const Node = ({ id, position: initialPosition, label, type, data, isSelected, on
             )}
 
             {hovered && !isSelected && (
-                <Float speed={5} rotationIntensity={0.2} floatIntensity={0.2}>
-                    <Text
-                        position={[0, 0.7, 0]}
-                        fontSize={0.18}
-                        color="white"
-                        anchorX="center"
-                        anchorY="middle"
-                        depthTest={false}
-                        renderOrder={999}
-                        outlineWidth={0.02}
-                        outlineColor="#000000"
-                        fontWeight="bold"
-                    >
-                        {`DOC #${data.doc_id || '?'} | PAGE ${data.page || '?'} | LINE ${data.label || '?'}`}
-                    </Text>
-                </Float>
+                <Html distanceFactor={8} position={[0.8, 0, 0]} zIndexRange={[1000, 0]}>
+                    <div style={{
+                        background: 'rgba(0, 0, 0, 0.9)',
+                        border: `2px solid ${color}`,
+                        borderRadius: '8px',
+                        padding: '8px 12px',
+                        color: 'white',
+                        fontSize: '11px',
+                        fontWeight: 'bold',
+                        whiteSpace: 'nowrap',
+                        backdropFilter: 'blur(10px)',
+                        boxShadow: `0 4px 15px rgba(0,0,0,0.7), 0 0 10px ${color}33`,
+                        transform: 'translate(-50%, -50%)',
+                        pointerEvents: 'none',
+                        letterSpacing: '0.5px'
+                    }}>
+                        <div style={{ 
+                            background: `linear-gradient(90deg, ${color}44, transparent)`,
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            marginBottom: '4px'
+                        }}>
+                            {type === 'regulation' ? 'STANDARD' : 'REQUIREMENT'}
+                        </div>
+                        <div style={{ fontSize: '10px', opacity: 0.9 }}>
+                            DOC #{data.doc_id || '?'} | PAGE {data.page || '?'} | LINE {data.label || '?'}
+                        </div>
+                        {data.status && (
+                            <div style={{ 
+                                fontSize: '9px', 
+                                marginTop: '4px',
+                                padding: '1px 4px',
+                                background: color + '22',
+                                borderRadius: '3px'
+                            }}>
+                                STATUS: {data.status}
+                            </div>
+                        )}
+                    </div>
+                </Html>
             )}
         </group>
     );
