@@ -304,6 +304,18 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
                                             whiteSpace: 'nowrap'
                                         }}>
                                             {f.filename}
+                                            <span style={{
+                                                background: '#a855f7',
+                                                color: '#fff',
+                                                padding: '2px 6px',
+                                                borderRadius: '4px',
+                                                fontSize: '10px',
+                                                fontWeight: 800,
+                                                marginLeft: '8px',
+                                                boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
+                                            }}>
+                                                ID: {f.id}
+                                            </span>
                                         </div>
                                     </div>
                                     <button

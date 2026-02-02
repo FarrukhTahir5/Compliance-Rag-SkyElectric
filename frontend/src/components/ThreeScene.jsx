@@ -14,6 +14,14 @@ const Node = ({ id, position: initialPosition, label, type, data, isSelected, on
 
     useCursor(hovered);
 
+    const handleMeshClick = (e) => {
+        e.stopPropagation();
+        if (!dragging) {
+            console.log("Mesh clicked, selecting node:", data.label);
+            onClick(data);
+        }
+    };
+
     const onPointerDown = (e) => {
         e.stopPropagation();
         setDragStartPos([mouse.x, mouse.y]);
@@ -27,7 +35,7 @@ const Node = ({ id, position: initialPosition, label, type, data, isSelected, on
             // Check if this was a click (minimal mouse movement) or a drag
             if (dragStartPos) {
                 const dragDistance = Math.sqrt(
-                    Math.pow(mouse.x - dragStartPos[0], 2) + 
+                    Math.pow(mouse.x - dragStartPos[0], 2) +
                     Math.pow(mouse.y - dragStartPos[1], 2)
                 );
                 if (dragDistance < 0.01) { // Small threshold for click vs drag
@@ -47,13 +55,15 @@ const Node = ({ id, position: initialPosition, label, type, data, isSelected, on
         e.stopPropagation();
 
         // Project mouse position to 3D space at the node's depth
-        const vec = new THREE.Vector3(mouse.x, mouse.y, 0);
-        vec.unproject(camera);
-        const dir = vec.sub(camera.position).normalize();
-        const distance = -camera.position.z / dir.z;
-        const pos = camera.position.clone().add(dir.multiplyScalar(distance));
+        const planeIntersectPoint = new THREE.Vector3();
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(mouse, camera);
 
-        const newPos = [pos.x, pos.y, 0];
+        // Use a virtual plane at z=0 for dragging
+        const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+        raycaster.ray.intersectPlane(plane, planeIntersectPoint);
+
+        const newPos = [planeIntersectPoint.x, planeIntersectPoint.y, 0];
         setPosition(newPos);
         onPositionChange(id, newPos);
     };
@@ -83,22 +93,53 @@ const Node = ({ id, position: initialPosition, label, type, data, isSelected, on
 
     return (
         <group position={position}>
+            {/* Fresnel Glow Shell */}
+            <mesh scale={[1.2, 1.2, 1.2]}>
+                <sphereGeometry args={[type === 'regulation' ? 0.15 : 0.08, 32, 32]} />
+                <meshStandardMaterial
+                    color={color}
+                    transparent
+                    opacity={0.15}
+                    side={THREE.BackSide}
+                    emissive={color}
+                    emissiveIntensity={2}
+                />
+            </mesh>
+
+            {/* Core Planet */}
             <mesh
                 ref={meshRef}
                 onPointerOver={() => setHovered(true)}
                 onPointerOut={() => setHovered(false)}
                 onPointerDown={onPointerDown}
+                onClick={handleMeshClick}
             >
                 <sphereGeometry args={[type === 'regulation' ? 0.15 : 0.08, 32, 32]} />
                 <meshStandardMaterial
                     color={color}
                     emissive={color}
-                    emissiveIntensity={hovered || isSelected ? 2 : 0.5}
-                    metalness={0.8}
-                    roughness={0.2}
+                    emissiveIntensity={hovered || isSelected ? 4 : 1}
+                    metalness={1}
+                    roughness={0}
+                    bumpScale={0.05}
                     toneMapped={false}
                 />
             </mesh>
+
+            {/* Planetary Rings for Standards */}
+            {type === 'regulation' && (
+                <mesh rotation={[Math.PI / 2.5, 0, 0]}>
+                    <ringGeometry args={[0.2, 0.4, 64]} />
+                    <meshStandardMaterial
+                        color={color}
+                        transparent
+                        opacity={0.4}
+                        side={THREE.DoubleSide}
+                        emissive={color}
+                        emissiveIntensity={1}
+                    />
+                </mesh>
+            )}
 
             {isSelected && (
                 <Html distanceFactor={10} position={[0.5, 0.5, 0]} zIndexRange={[100, 0]}>
@@ -108,7 +149,9 @@ const Node = ({ id, position: initialPosition, label, type, data, isSelected, on
                         fontSize: '12px',
                         color: 'white',
                         boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
-                        border: `1px solid ${color}`
+                        border: `1px solid ${color}`,
+                        backdropFilter: 'blur(20px)',
+                        background: 'rgba(15, 15, 20, 0.8)'
                     }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                             <span style={{ fontWeight: 'bold' }}>
@@ -140,8 +183,8 @@ const Node = ({ id, position: initialPosition, label, type, data, isSelected, on
                         </div>
                         <p style={{ margin: 0, opacity: 0.9 }}>{data.reasoning || data.text}</p>
                         {data.evidence && data.evidence !== 'N/A' && (
-                            <div style={{ marginTop: '10px', padding: '8px', background: 'rgba(0,0,0,0.3)', borderLeft: '2px solid white' }}>
-                                <span style={{ fontSize: '10px', opacity: 0.5 }}>EVIDENCE:</span>
+                            <div style={{ marginTop: '10px', padding: '8px', background: 'rgba(168, 85, 247, 0.1)', borderLeft: '2px solid #a855f7' }}>
+                                <span style={{ fontSize: '10px', opacity: 0.5, letterSpacing: '1px' }}>EVIDENCE:</span>
                                 <p style={{ margin: 0, fontStyle: 'italic' }}>"{data.evidence}"</p>
                             </div>
                         )}
@@ -150,15 +193,20 @@ const Node = ({ id, position: initialPosition, label, type, data, isSelected, on
             )}
 
             {hovered && !isSelected && (
-                <Float speed={2} rotationIntensity={0.5} floatIntensity={0.5}>
+                <Float speed={5} rotationIntensity={0.2} floatIntensity={0.2}>
                     <Text
-                        position={[0, 0.5, 0]}
-                        fontSize={0.2}
+                        position={[0, 0.7, 0]}
+                        fontSize={0.18}
                         color="white"
                         anchorX="center"
                         anchorY="middle"
+                        depthTest={false}
+                        renderOrder={999}
+                        outlineWidth={0.02}
+                        outlineColor="#000000"
+                        fontWeight="bold"
                     >
-                        {type === 'regulation' ? data.label : data.status}
+                        {`DOC #${data.doc_id || '?'} | PAGE ${data.page || '?'} | LINE ${data.label || '?'}`}
                     </Text>
                 </Float>
             )}
@@ -236,11 +284,11 @@ const ThreeScene = ({ graphData: data, onNodeClick, selectedNode, loading }) => 
                 enabled={!isDragging}
             />
 
-            {data && Object.keys(nodePositions).length > 0 && data.nodes.map((node) => (
+            {data?.nodes?.length > 0 && Object.keys(nodePositions).length > 0 && data.nodes.map((node) => (
                 <Node
                     key={node.id}
                     id={node.id}
-                    position={nodePositions[node.id]}
+                    position={nodePositions[node.id] || [0, 0, 0]}
                     label={node.label}
                     type={node.type}
                     data={node}

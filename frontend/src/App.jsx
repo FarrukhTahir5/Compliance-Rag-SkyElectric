@@ -14,6 +14,31 @@ function App() {
   const [assessmentId, setAssessmentId] = useState(null);
   const [mode, setMode] = useState('graph'); // 'graph' | 'chat'
 
+  // Ensure temporary session storage
+  React.useEffect(() => {
+    const handleReset = async () => {
+      try {
+        await axios.post(`${API_BASE}/reset`);
+      } catch (e) {
+        console.error("Failed to reset session:", e);
+      }
+    };
+
+    // Reset on initial load to ensure a clean slate for the new session
+    handleReset();
+
+    // Reset on tab close or refresh
+    const onUnload = () => {
+      // Use beacon to fire assessment reset reliably
+      navigator.sendBeacon(`${API_BASE}/reset`);
+    };
+
+    window.addEventListener('beforeunload', onUnload);
+    return () => {
+      window.removeEventListener('beforeunload', onUnload);
+    };
+  }, []);
+
   const handleAssessmentComplete = async (assessmentId) => {
     if (!assessmentId) {
       setGraphData(null);

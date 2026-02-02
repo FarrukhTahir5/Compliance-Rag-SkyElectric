@@ -230,6 +230,7 @@ def get_graph_data(assessment_id: int):
             "label": rc.clause_id,
             "type": "regulation",
             "page": rc.page_number,
+            "doc_id": assessment.regulation_doc_id,
             "text": rc.text[:100] + "..."
         })
         
@@ -242,6 +243,7 @@ def get_graph_data(assessment_id: int):
             "type": "customer",
             "status": r.status,
             "risk": r.risk,
+            "doc_id": assessment.customer_doc_id,
             "page": cust_clause.page_number if cust_clause else None,
             "reasoning": r.reasoning,
             "evidence": r.evidence_text
