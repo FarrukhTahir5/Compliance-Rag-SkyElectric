@@ -127,13 +127,22 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
 
         try {
             const selectedFiles = files.filter(f => selectedDocs.includes(f.id));
+            if (selectedFiles.length === 0) {
+                alert("No documents selected.");
+                onAssessmentComplete(null);
+                return;
+            }
+
             const firstDoc = selectedFiles[0];
             const secondDoc = selectedFiles.length > 1 ? selectedFiles[1] : firstDoc;
 
+            console.log(`Analyzing: Customer=${firstDoc.filename}, Regulation=${secondDoc.filename}`);
             const res = await axios.post(`${API_BASE}/assess?customer_doc_id=${firstDoc.id}&regulation_doc_id=${secondDoc.id}`);
             onAssessmentComplete(res.data.assessment_id);
         } catch (e) {
-            alert("Assessment failed.");
+            console.error("Assessment Error:", e);
+            const detail = e.response?.data?.detail || e.message;
+            alert(`Assessment failed: ${detail}`);
             onAssessmentComplete(null);
         }
     };

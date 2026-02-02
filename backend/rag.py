@@ -58,7 +58,7 @@ class RAGEngine:
             
         return docs_with_scores[:top_k]
 
-    def analyze_compliance(self, customer_clause: str, regulation_context: str):
+    async def analyze_compliance(self, customer_clause: str, regulation_context: str):
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a compliance expert. Compare the provided customer clause against the regulation context.
             Identify if it is COMPLIANT, PARTIAL, or NON_COMPLIANT.
@@ -74,7 +74,9 @@ class RAGEngine:
         ])
         
         chain = prompt | self.llm
-        res = chain.invoke({"customer": customer_clause, "context": regulation_context})
+        print(f"DEBUG: Calling LLM for compliance analysis...")
+        res = await chain.ainvoke({"customer": customer_clause, "context": regulation_context})
+        print(f"DEBUG: LLM response received")
         
         import json
         try:
