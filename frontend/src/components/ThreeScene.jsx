@@ -17,8 +17,15 @@ const Node = ({ id, position: initialPosition, label, type, data, isSelected, on
         e.stopPropagation();
         setDragging(true);
         onDragStart(); // Signal to ThreeScene to disable OrbitControls
-        onClick();
         document.body.style.cursor = 'grabbing';
+    };
+
+    const handleMeshClick = (e) => {
+        e.stopPropagation();
+        if (!dragging) {
+            console.log("Mesh clicked, selecting node:", data.label); // Debug log
+            onClick(data); // Only select if we're not dragging
+        }
     };
 
     const onPointerMove = (e) => {
@@ -73,6 +80,7 @@ const Node = ({ id, position: initialPosition, label, type, data, isSelected, on
                 onPointerOver={() => setHovered(true)}
                 onPointerOut={() => setHovered(false)}
                 onPointerDown={onPointerDown}
+                onClick={handleMeshClick}
             >
                 <sphereGeometry args={[type === 'regulation' ? 0.15 : 0.08, 32, 32]} />
                 <meshStandardMaterial
@@ -99,7 +107,27 @@ const Node = ({ id, position: initialPosition, label, type, data, isSelected, on
                             <span style={{ fontWeight: 'bold' }}>
                                 {type === 'regulation' ? `Regulation ${data.label}` : `Clause ${data.label}`}
                             </span>
-                            <button onClick={(e) => { e.stopPropagation(); onClick(null); }} style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer' }}>
+                            <button 
+                                onClick={(e) => { 
+                                    e.stopPropagation(); 
+                                    e.preventDefault();
+                                    console.log("X button clicked, calling onClick(null)"); // Debug log
+                                    onClick(null); 
+                                }} 
+                                style={{ 
+                                    background: 'transparent', 
+                                    border: 'none', 
+                                    color: 'white', 
+                                    cursor: 'pointer',
+                                    padding: '4px',
+                                    borderRadius: '2px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center'
+                                }}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                onPointerDown={(e) => e.stopPropagation()}
+                            >
                                 <X size={14} />
                             </button>
                         </div>
@@ -210,7 +238,7 @@ const ThreeScene = ({ graphData: data, onNodeClick, selectedNode, loading }) => 
                     type={node.type}
                     data={node}
                     isSelected={selectedNode?.id === node.id}
-                    onClick={() => onNodeClick(node)}
+                    onClick={(nodeData) => onNodeClick(nodeData)}
                     onPositionChange={handlePositionChange}
                     onDragStart={() => setIsDragging(true)}
                     onDragEnd={() => setIsDragging(false)}

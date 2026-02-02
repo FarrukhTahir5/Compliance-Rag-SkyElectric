@@ -1,15 +1,31 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Upload, FileText, CheckCircle, AlertTriangle, XCircle, Info, Database, Download } from 'lucide-react';
+import { Upload, FileText, CheckCircle, AlertTriangle, XCircle, Info, Database, Download, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
-const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessmentId }) => {
+const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeClick, assessmentId }) => {
     const [files, setFiles] = useState([]);
     const [uploading, setUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
-    const [activeDoc, setActiveDoc] = useState({ regulation: null, customer: null });
+    const [selectedDocs, setSelectedDocs] = useState([]);
+    
+    // Color palette for file highlighting
+    const colors = [
+        { bg: '#70df27ff', border: '#21e03aff', name: 'green' },
+        { bg: '#4ecdc4', border: '#26a69a', name: 'teal' },
+        { bg: '#45b7d1', border: '#2196f3', name: 'blue' },
+        { bg: '#96ceb4', border: '#66bb6a', name: 'green' },
+        { bg: '#ffeaa7', border: '#ffeb3b', name: 'yellow' },
+        { bg: '#dda0dd', border: '#ba68c8', name: 'plum' },
+        { bg: '#fab1a0', border: '#ff7043', name: 'orange' },
+        { bg: '#fd79a8', border: '#e91e63', name: 'pink' },
+        { bg: '#a29bfe', border: '#673ab7', name: 'purple' },
+        { bg: '#6c5ce7', border: '#3f51b5', name: 'indigo' }
+    ];
+    
+    const getFileColor = (index) => colors[index % colors.length];
 
     useEffect(() => {
         fetchDocs();
@@ -19,6 +35,10 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
         try {
             const res = await axios.get(`${API_BASE}/documents`);
             setFiles(res.data);
+            
+            // Auto-select all uploaded documents
+            const allDocIds = res.data.map(doc => doc.id);
+            setSelectedDocs(allDocIds);
         } catch (e) { console.error(e); }
     };
 
@@ -28,17 +48,18 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
 
         // Optimistic update
         const originalFiles = [...files];
+        const originalSelected = [...selectedDocs];
         setFiles(files.filter(f => f.id !== id));
+        setSelectedDocs(selectedDocs.filter(docId => docId !== id));
 
         try {
             await axios.delete(`${API_BASE}/documents/${id}`);
-            if (activeDoc.regulation === id) setActiveDoc(p => ({ ...p, regulation: null }));
-            if (activeDoc.customer === id) setActiveDoc(p => ({ ...p, customer: null }));
             // Refresh in background to stay in sync
             fetchDocs();
         } catch (e) {
             alert("Delete failed");
             setFiles(originalFiles); // Rollback if failed
+            setSelectedDocs(originalSelected);
         }
     };
 
@@ -47,35 +68,51 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
         try {
             await axios.post(`${API_BASE}/reset`);
             fetchDocs();
-            setActiveDoc({ regulation: null, customer: null });
+            setSelectedDocs([]);
             onAssessmentComplete(null); // Reset graph
         } catch (e) { alert("Reset failed"); }
     };
 
-    const handleUpload = async (e, type) => {
-        const file = e.target.files[0];
-        if (!file) return;
+    const handleUpload = async (e) => {
+        const selectedFiles = Array.from(e.target.files);
+        if (!selectedFiles.length) return;
 
-        if (!file.name.toLowerCase().endsWith('.pdf')) {
-            alert("Only PDF files are allowed.");
+        // Check file types
+        for (const file of selectedFiles) {
+            if (!file.name.toLowerCase().endsWith('.pdf')) {
+                alert("Only PDF files are allowed.");
+                return;
+            }
+        }
+
+        // Check max 10 documents total
+        if (files.length + selectedFiles.length > 10) {
+            alert("Maximum 10 documents allowed. Please remove some documents first.");
             return;
         }
 
         setUploading(true);
         setUploadProgress(0);
 
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('file_type', type);
-
         try {
-            await axios.post(`${API_BASE}/upload`, formData, {
-                onUploadProgress: (progressEvent) => {
-                    const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                    setUploadProgress(percentCompleted);
-                }
+            const uploadPromises = selectedFiles.map(async (file, index) => {
+                const formData = new FormData();
+                formData.append('file', file);
+                // Set all documents as 'customer' type since we're treating them uniformly
+                formData.append('file_type', 'customer');
+
+                return await axios.post(`${API_BASE}/upload`, formData, {
+                    onUploadProgress: (progressEvent) => {
+                        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                        // Average progress across all files
+                        const totalProgress = ((index + (percentCompleted / 100)) / selectedFiles.length) * 100;
+                        setUploadProgress(Math.round(totalProgress));
+                    }
+                });
             });
-            fetchDocs();
+
+            await Promise.all(uploadPromises);
+            fetchDocs(); // This will auto-select all documents including new ones
         } catch (e) {
             alert("Upload failed. Check if backend is running.");
         } finally {
@@ -85,20 +122,44 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
     };
 
     const runAssessment = async () => {
-        if (!activeDoc.regulation || !activeDoc.customer) {
-            alert("Select both a regulation and a customer document.");
+        if (selectedDocs.length < 1) {
+            alert("Please upload at least 1 document to analyze.");
             return;
         }
 
         onStartAnalysis(); // Trigger loading state immediately in App.jsx
 
         try {
-            const res = await axios.post(`${API_BASE}/assess?customer_doc_id=${activeDoc.customer}&regulation_doc_id=${activeDoc.regulation}`);
+            // Get all selected documents
+            const selectedFiles = files.filter(f => selectedDocs.includes(f.id));
+            
+            if (selectedFiles.length === 0) {
+                alert("No documents selected for analysis.");
+                onAssessmentComplete(null);
+                return;
+            }
+
+            // For now, we'll use the first two documents for the backend API
+            // If there's only one document, use it for both customer and regulation
+            const firstDoc = selectedFiles[0];
+            const secondDoc = selectedFiles.length > 1 ? selectedFiles[1] : firstDoc;
+
+            const res = await axios.post(`${API_BASE}/assess?customer_doc_id=${firstDoc.id}&regulation_doc_id=${secondDoc.id}`);
             onAssessmentComplete(res.data.assessment_id);
         } catch (e) {
             alert("Assessment failed. Ensure API key is set in backend.");
             onAssessmentComplete(null);
         }
+    };
+
+    const toggleDocSelection = (docId) => {
+        setSelectedDocs(prev => {
+            if (prev.includes(docId)) {
+                return prev.filter(id => id !== docId);
+            } else {
+                return [...prev, docId];
+            }
+        });
     };
 
     return (
@@ -111,21 +172,34 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', textTransform: 'uppercase', opacity: 0.6 }}>
                     <Upload size={16} /> Data Ingestion
                 </h3>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
-                    <label className="btn-primary" style={{ fontSize: '12px', textAlign: 'center', padding: '12px' }}>
-                        REGULATION PDF
-                        <input type="file" hidden accept=".pdf" onChange={(e) => handleUpload(e, 'regulation')} />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px', marginTop: '12px' }}>
+                    <label className="btn-primary" style={{ fontSize: '12px', textAlign: 'center', padding: '12px', background: 'linear-gradient(135deg, #4ecdc4 0%, #45b7d1 100%)' }}>
+                        📎 UPLOAD DOCUMENTS (Max 10)
+                        <input type="file" hidden accept=".pdf" multiple onChange={(e) => handleUpload(e)} />
                     </label>
-                    <label className="btn-primary" style={{ fontSize: '12px', textAlign: 'center', padding: '12px', background: '#3b82f6' }}>
-                        CUSTOMER PDF
-                        <input type="file" hidden accept=".pdf" onChange={(e) => handleUpload(e, 'customer')} />
-                    </label>
+                    <div style={{ fontSize: '10px', opacity: 0.6, textAlign: 'center', marginTop: '8px', padding: '8px', background: 'rgba(78, 205, 196, 0.1)', borderRadius: '6px', border: '1px solid rgba(78, 205, 196, 0.3)' }}>
+                        ✨ Documents are automatically selected for analysis after upload!
+                        <br />Click any document to toggle selection. All document types are supported.
+                    </div>
                 </div>
             </section>
 
             <section style={{ marginBottom: '32px' }}>
                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', textTransform: 'uppercase', opacity: 0.6 }}>
                     <Database size={16} /> Knowledge Base
+                    {selectedDocs.length > 0 && (
+                        <span style={{ 
+                            marginLeft: 'auto',
+                            background: 'linear-gradient(135deg, #4ecdc4, #45b7d1)', 
+                            color: 'white', 
+                            padding: '2px 8px', 
+                            borderRadius: '10px', 
+                            fontSize: '10px', 
+                            fontWeight: 'bold'
+                        }}>
+                            {selectedDocs.length}/{files.length} SELECTED
+                        </span>
+                    )}
                 </h3>
                 <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     {uploading && (
@@ -155,59 +229,112 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
                             }}></div>
                         </div>
                     )}
-                    {files.map(f => (
-                        <div
-                            key={f.id}
-                            onClick={() => setActiveDoc(prev => ({ ...prev, [f.file_type]: f.id }))}
-                            style={{
-                                padding: '12px',
-                                borderRadius: '8px',
-                                background: activeDoc[f.file_type] === f.id
-                                    ? (f.file_type === 'regulation' ? 'linear-gradient(135deg, rgba(99, 102, 241, 0.3) 0%, rgba(168, 85, 247, 0.3) 100%)' : 'rgba(59, 130, 246, 0.3)')
-                                    : 'rgba(255,255,255,0.05)',
-                                border: `1px solid ${activeDoc[f.file_type] === f.id
-                                    ? (f.file_type === 'regulation' ? '#a855f7' : '#3b82f6')
-                                    : 'transparent'}`,
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '12px',
-                                position: 'relative'
-                            }}
-                        >
-                            <FileText size={18} color={f.file_type === 'regulation' ? '#a855f7' : '#3b82f6'} />
-                            <div style={{ overflow: 'hidden', flex: 1 }}>
-                                <div style={{ fontSize: '14px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.filename}</div>
-                                <div style={{ fontSize: '11px', opacity: 0.5 }}>v{f.version} • {f.file_type}</div>
-                            </div>
-                            <button
-                                onClick={(e) => handleDelete(e, f.id)}
-                                style={{ background: 'transparent', border: 'none', color: '#ef4444', opacity: 0.5, cursor: 'pointer', padding: '4px' }}
-                                onMouseEnter={(e) => e.target.style.opacity = 1}
-                                onMouseLeave={(e) => e.target.style.opacity = 0.5}
+                    {files.map((f, index) => {
+                        const color = getFileColor(index);
+                        const isSelected = selectedDocs.includes(f.id);
+                        
+                        return (
+                            <div
+                                key={f.id}
+                                onClick={() => toggleDocSelection(f.id)}
+                                style={{
+                                    padding: '12px',
+                                    borderRadius: '8px',
+                                    background: isSelected
+                                        ? `linear-gradient(135deg, ${color.bg}40, ${color.bg}20)`
+                                        : 'rgba(255,255,255,0.05)',
+                                    border: `2px solid ${isSelected ? color.border : 'transparent'}`,
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '12px',
+                                    position: 'relative',
+                                    transition: 'all 0.2s ease',
+                                    boxShadow: isSelected ? `0 0 15px ${color.bg}30` : 'none'
+                                }}
                             >
-                                <XCircle size={14} />
-                            </button>
-                        </div>
-                    ))}
+                                <div
+                                    style={{
+                                        width: '8px',
+                                        height: '8px',
+                                        borderRadius: '50%',
+                                        background: color.bg,
+                                        boxShadow: `0 0 8px ${color.bg}60`,
+                                        animation: isSelected ? 'pulse 2s infinite' : 'none'
+                                    }}
+                                />
+                                <FileText size={18} color={isSelected ? color.border : '#888'} />
+                                <div style={{ overflow: 'hidden', flex: 1 }}>
+                                    <div style={{ 
+                                        fontSize: '14px', 
+                                        fontWeight: isSelected ? 600 : 500, 
+                                        overflow: 'hidden', 
+                                        textOverflow: 'ellipsis', 
+                                        whiteSpace: 'nowrap',
+                                        color: isSelected ? color.border : 'inherit'
+                                    }}>
+                                        {f.filename}
+                                    </div>
+                                    <div style={{ fontSize: '11px', opacity: 0.5 }}>
+                                        v{f.version} • {f.file_type} • {color.name}
+                                    </div>
+                                </div>
+                                {isSelected && (
+                                    <div style={{
+                                        background: color.bg,
+                                        color: 'white',
+                                        borderRadius: '10px',
+                                        padding: '2px 8px',
+                                        fontSize: '10px',
+                                        fontWeight: 'bold',
+                                        textTransform: 'uppercase'
+                                    }}>
+                                        SELECTED
+                                    </div>
+                                )}
+                                <button
+                                    onClick={(e) => handleDelete(e, f.id)}
+                                    style={{ 
+                                        background: 'transparent', 
+                                        border: 'none', 
+                                        color: '#ef4444', 
+                                        opacity: 0.5, 
+                                        cursor: 'pointer', 
+                                        padding: '4px' 
+                                    }}
+                                    onMouseEnter={(e) => e.target.style.opacity = 1}
+                                    onMouseLeave={(e) => e.target.style.opacity = 0.5}
+                                >
+                                    <XCircle size={14} />
+                                </button>
+                            </div>
+                        );
+                    })}
                 </div>
                 <button
                     onClick={runAssessment}
-                    disabled={!activeDoc.regulation || !activeDoc.customer}
+                    disabled={selectedDocs.length < 1}
                     className="btn-primary"
                     style={{
                         width: '100%',
                         marginTop: '16px',
                         padding: '14px',
-                        background: (!activeDoc.regulation || !activeDoc.customer) ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)',
-                        color: (!activeDoc.regulation || !activeDoc.customer) ? 'rgba(255,255,255,0.3)' : 'white'
+                        background: selectedDocs.length < 1 
+                            ? 'rgba(255,255,255,0.1)' 
+                            : selectedDocs.length === 1
+                                ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+                                : 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)',
+                        color: selectedDocs.length < 1 ? 'rgba(255,255,255,0.3)' : 'white',
+                        boxShadow: selectedDocs.length > 0 ? '0 0 20px rgba(168, 85, 247, 0.4)' : 'none',
+                        transform: selectedDocs.length > 0 ? 'scale(1.02)' : 'scale(1)',
+                        transition: 'all 0.3s ease'
                     }}
                 >
-                    {(!activeDoc.regulation && !activeDoc.customer)
-                        ? "SELECT DOCUMENTS"
-                        : (!activeDoc.regulation || !activeDoc.customer)
-                            ? "SELECT REMAINING DOC"
-                            : "ANALYZE (2 DOCS SELECTED)"}
+                    {selectedDocs.length === 0
+                        ? "📥 UPLOAD DOCUMENTS FIRST"
+                        : selectedDocs.length === 1
+                            ? "🔍 ANALYZE 1 DOCUMENT"
+                            : `🚀 ANALYZE ${selectedDocs.length} DOCUMENTS`}
                 </button>
                 <button
                     onClick={handleReset}
@@ -248,12 +375,33 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, assessme
                     >
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
                             {selectedNode.status === 'COMPLIANT' ? <CheckCircle color="#10b981" size={24} /> : selectedNode.status === 'PARTIAL' ? <AlertTriangle color="#f59e0b" size={24} /> : selectedNode.status === 'NON_COMPLIANT' ? <XCircle color="#ef4444" size={24} /> : <Info color="#6366f1" size={24} />}
-                            <h3 style={{ margin: 0 }}>Clause {selectedNode.label}</h3>
+                            <h3 style={{ margin: 0, flex: 1 }}>Clause {selectedNode.label}</h3>
                             {selectedNode.page && (
-                                <span style={{ marginLeft: 'auto', fontSize: '11px', background: 'rgba(255,255,255,0.1)', padding: '2px 8px', borderRadius: '4px' }}>
+                                <span style={{ fontSize: '11px', background: 'rgba(255,255,255,0.1)', padding: '2px 8px', borderRadius: '4px', marginRight: '8px' }}>
                                     PAGE {selectedNode.page}
                                 </span>
                             )}
+                            <button
+                                onClick={() => onNodeClick(null)}
+                                style={{ 
+                                    background: 'transparent', 
+                                    border: 'none', 
+                                    color: '#ef4444', 
+                                    cursor: 'pointer', 
+                                    padding: '4px',
+                                    borderRadius: '4px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    opacity: 0.7,
+                                    transition: 'opacity 0.2s ease'
+                                }}
+                                onMouseEnter={(e) => e.target.style.opacity = 1}
+                                onMouseLeave={(e) => e.target.style.opacity = 0.7}
+                                title="Close details"
+                            >
+                                <X size={16} />
+                            </button>
                         </div>
 
                         <div style={{ marginBottom: '20px' }}>

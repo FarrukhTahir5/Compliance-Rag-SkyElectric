@@ -12,6 +12,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
+from langchain_community.vectorstores import FAISS
 import io
 
 @asynccontextmanager
@@ -143,6 +144,26 @@ async def assess_compliance(
     db.commit()
     return {"assessment_id": assessment.id, "results_count": len(results)}
 
+@app.get("/debug/vector-store")
+def debug_vector_store(db: Session = Depends(get_db)):
+    import os
+    vector_db_path = "backend/data/faiss_index"
+    
+    info = {
+        "vector_store_exists": os.path.exists(vector_db_path),
+        "total_documents": db.query(Document).count(),
+        "total_clauses": db.query(Clause).count(),
+    }
+    
+    if os.path.exists(vector_db_path):
+        try:
+            vector_store = FAISS.load_local(vector_db_path, rag_engine.embeddings, allow_dangerous_deserialization=True)
+            info["vector_store_size"] = len(vector_store.docstore._dict)
+        except Exception as e:
+            info["vector_store_error"] = str(e)
+    
+    return info
+
 @app.post("/chat")
 async def chat_with_docs(
     query: str = Form(...),
@@ -151,10 +172,23 @@ async def chat_with_docs(
     # Search across all documents for the most relevant context
     similar_docs = rag_engine.retrieve_similar_clauses(query, top_k=5)
     
+    print(f"DEBUG: Chat query: '{query}'")
+    print(f"DEBUG: Found {len(similar_docs)} similar documents")
+    
     if not similar_docs:
-        return {"answer": "I couldn't find any relevant information in your documents."}
+        # Check if we have any documents at all
+        total_docs = db.query(Document).count()
+        total_clauses = db.query(Clause).count()
+        print(f"DEBUG: Total documents in DB: {total_docs}, Total clauses: {total_clauses}")
+        
+        if total_docs == 0:
+            return {"answer": "No documents have been uploaded yet. Please upload some documents first."}
+        else:
+            return {"answer": f"I couldn't find any relevant information for your query in the {total_docs} uploaded documents with {total_clauses} clauses. Try rephrasing your question or check if the documents contain the information you're looking for."}
         
     context = "\n\n".join([f"Source: {d.metadata.get('clause_id')} (Doc ID: {d.metadata.get('doc_id')}, Page: {d.metadata.get('page_number', 'N/A')})\nContent: {d.page_content}" for d, score in similar_docs])
+    
+    print(f"DEBUG: Context length: {len(context)} characters")
     
     # Use LLM to answer the question based on context
     answer = rag_engine.answer_general_question(query, context)

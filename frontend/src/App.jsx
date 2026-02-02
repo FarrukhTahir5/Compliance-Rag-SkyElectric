@@ -47,6 +47,7 @@ function App() {
         onAssessmentComplete={handleAssessmentComplete}
         onStartAnalysis={handleStartAnalysis}
         selectedNode={selectedNode}
+        onNodeClick={handleNodeClick}
         assessmentId={assessmentId}
       />
 

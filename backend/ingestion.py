@@ -68,9 +68,8 @@ def parse_pdf(file_content: bytes, filename: str, file_type: str, version: str =
     
     doc_id = db_doc.id # Capture ID while session is active
 
-    # Ingest into Vector DB
-    if file_type == 'regulation':
-        rag_engine.ingest_documents(ingest_clauses)
+    # Ingest all documents into Vector DB for RAG search
+    rag_engine.ingest_documents(ingest_clauses)
     
     db.close()
     return doc_id
