@@ -15,28 +15,24 @@ function App() {
   const [mode, setMode] = useState('graph'); // 'graph' | 'chat'
   const [useKb, setUseKb] = useState(false);
 
-  // Ensure temporary session storage
+  // Multi-session management
   React.useEffect(() => {
-    const handleReset = async () => {
-      try {
-        await axios.post(`${API_BASE}/reset`);
-      } catch (e) {
-        console.error("Failed to reset session:", e);
-      }
-    };
+    // Generate or retrieve session ID
+    let sid = sessionStorage.getItem('compliance_session_id');
+    if (!sid) {
+      sid = crypto.randomUUID();
+      sessionStorage.setItem('compliance_session_id', sid);
+    }
 
-    // Reset on initial load to ensure a clean slate for the new session
-    handleReset();
+    // Set up global axios interceptor
+    const interceptor = axios.interceptors.request.use((config) => {
+      config.headers['X-Session-ID'] = sid;
+      return config;
+    });
 
-    // Reset on tab close or refresh
-    const onUnload = () => {
-      // Use beacon to fire assessment reset reliably
-      navigator.sendBeacon(`${API_BASE}/reset`);
-    };
-
-    window.addEventListener('beforeunload', onUnload);
+    // Clean up on unmount
     return () => {
-      window.removeEventListener('beforeunload', onUnload);
+      axios.interceptors.request.eject(interceptor);
     };
   }, []);
 

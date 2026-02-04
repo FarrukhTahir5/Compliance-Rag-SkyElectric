@@ -1,5 +1,4 @@
-import os
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from .models import store, Document, Clause, Assessment, AssessmentResult
@@ -11,6 +10,9 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 import io
+import os
+import asyncio
+from datetime import datetime, timedelta
 from fastapi.responses import FileResponse
 import shutil
 
@@ -18,15 +20,44 @@ import shutil
 STORAGE_DIR = "backend/storage"
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
+async def session_cleanup_task():
+    """Background task to clear inactive sessions after 15 minutes."""
+    while True:
+        try:
+            await asyncio.sleep(60)  # Check every minute
+            now = datetime.utcnow()
+            sessions_to_purge = []
+            
+            for session_id, session_data in store.sessions.items():
+                if now - session_data.last_activity > timedelta(minutes=15):
+                    sessions_to_purge.append(session_id)
+            
+            for session_id in sessions_to_purge:
+                print(f"DEBUG: Purging inactive session: {session_id}")
+                # Clear from RAG (Pinecone)
+                rag_engine.clear_index(session_id=session_id)
+                # Clear from memory
+                store.reset(session_id=session_id)
+                
+                # Optionally delete physical files for this session
+                # (Files are prefixed with {doc_id}_ but we don't easily know session_id from filename)
+                # For now, we'll keep the storage cleanup simple or rely on a separate script.
+                
+        except Exception as e:
+            print(f"DEBUG: Session cleanup error: {e}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Clear any existing data on startup (fresh session)
-    store.reset()
-    # By default, clear only the session namespace in Pinecone
-    rag_engine.clear_index(namespace="session")
+    # Start cleanup task
+    cleanup_task = asyncio.create_task(session_cleanup_task())
     yield
+    cleanup_task.cancel()
 
 app = FastAPI(title="3D Compliance Intelligence API", lifespan=lifespan)
+
+# Dependency to get session ID
+def get_sid(x_session_id: str = Header("default")):
+    return x_session_id
 
 # CORS setup for React frontend
 app.add_middleware(
@@ -44,7 +75,8 @@ async def upload_file(
     file: UploadFile = File(...),
     file_type: str = Form(...),  # 'regulation' | 'customer'
     version: str = Form("1.0"),
-    namespace: str = Form("session"),
+    namespace: str = Form(None),
+    session_id: str = Depends(get_sid)
 ):
     # Check file extension
     filename_lower = file.filename.lower()
@@ -54,21 +86,21 @@ async def upload_file(
             detail=f"Only {', '.join(ALLOWED_EXTENSIONS)} files are supported."
         )
     
-    print(f"DEBUG: Uploading {file.filename} as {file_type} to namespace {namespace}")
+    print(f"DEBUG: Uploading {file.filename} as {file_type} to session {session_id}")
     content = await file.read()
-    doc_id = parse_document(content, file.filename, file_type, version, namespace=namespace)
+    doc_id = parse_document(content, file.filename, file_type, version, namespace=namespace, session_id=session_id)
     
     # Save the file to physical storage
     file_path = os.path.join(STORAGE_DIR, f"{doc_id}_{file.filename}")
     with open(file_path, "wb") as f:
         f.write(content)
         
-    print(f"DEBUG: Uploaded {file.filename}, doc_id: {doc_id}")
+    print(f"DEBUG: Uploaded {file.filename}, doc_id: {doc_id} in session {session_id}")
     return {"doc_id": doc_id, "filename": file.filename}
 
 @app.get("/documents/{doc_id}/download")
-def download_document(doc_id: int):
-    doc = store.get_document(doc_id)
+def download_document(doc_id: int, session_id: str = Depends(get_sid)):
+    doc = store.get_document(session_id, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -86,8 +118,8 @@ def download_document(doc_id: int):
     return FileResponse(file_path, filename=doc.filename)
 
 @app.get("/documents")
-def list_documents():
-    docs = store.get_all_documents()
+def list_documents(session_id: str = Depends(get_sid)):
+    docs = store.get_all_documents(session_id)
     return [
         {
             "id": d.id,
@@ -100,24 +132,24 @@ def list_documents():
     ]
 
 @app.delete("/documents/{doc_id}")
-def delete_document(doc_id: int):
-    doc = store.get_document(doc_id)
+def delete_document(doc_id: int, session_id: str = Depends(get_sid)):
+    doc = store.get_document(session_id, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
     # Delete related assessments
-    assessments = store.get_assessments_by_doc(doc_id)
+    assessments = store.get_assessments_by_doc(session_id, doc_id)
     for a in assessments:
-        store.delete_assessment(a.id)
+        store.delete_assessment(session_id, a.id)
     
     # Delete document and its clauses
-    store.delete_document(doc_id)
+    store.delete_document(session_id, doc_id)
     
     return {"message": "Document deleted"}
 
 @app.patch("/documents/{doc_id}/type")
-def update_document_type(doc_id: int, file_type: str = Form(...)):
-    doc = store.get_document(doc_id)
+def update_document_type(doc_id: int, file_type: str = Form(...), session_id: str = Depends(get_sid)):
+    doc = store.get_document(session_id, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -128,19 +160,20 @@ def update_document_type(doc_id: int, file_type: str = Form(...)):
     return {"message": "Document type updated", "file_type": file_type}
 
 @app.post("/reset")
-def reset_data():
-    store.reset()
-    rag_engine.clear_index(namespace="session")
-    return {"message": "All data cleared (session only)"}
+def reset_data(session_id: str = Depends(get_sid)):
+    store.reset(session_id)
+    rag_engine.clear_index(session_id=session_id)
+    return {"message": f"Data cleared for session {session_id}"}
 
 @app.post("/assess")
 async def assess_compliance(
-    customer_doc_id: int,
-    regulation_doc_id: int,
+    customer_doc_id: int = Form(...),
+    regulation_doc_id: int = Form(...),
     use_kb: bool = Form(False),
+    session_id: str = Depends(get_sid)
 ):
-    print(f"DEBUG: Assessing compliance. Customer Doc: {customer_doc_id}, Reg Doc: {regulation_doc_id}")
-    customer_clauses = store.get_clauses_by_document(customer_doc_id)
+    print(f"DEBUG: Assessing compliance for session {session_id}. Customer Doc: {customer_doc_id}, Reg Doc: {regulation_doc_id}")
+    customer_clauses = store.get_clauses_by_document(session_id, customer_doc_id)
     print(f"DEBUG: Found {len(customer_clauses)} clauses in customer doc")
     
     if not customer_clauses:
@@ -148,6 +181,7 @@ async def assess_compliance(
         raise HTTPException(status_code=400, detail="No clauses found in customer document")
     
     assessment = store.add_assessment(
+        session_id=session_id,
         customer_doc_id=customer_doc_id, 
         regulation_doc_id=regulation_doc_id
     )
@@ -158,14 +192,14 @@ async def assess_compliance(
     async def process_clause(c_clause):
         async with semaphore:
             # Retrieve similar regulation clauses
-            similar_docs = rag_engine.retrieve_similar_clauses(c_clause.text, doc_id=regulation_doc_id, use_kb=use_kb)
+            similar_docs = rag_engine.retrieve_similar_clauses(c_clause.text, doc_id=regulation_doc_id, use_kb=use_kb, session_id=session_id)
             
             if not similar_docs:
                 return None
                 
             best_match_doc, score = similar_docs[0]
             reg_clause_id_val = best_match_doc.metadata['clause_id']
-            reg_clause = store.get_clause_by_doc_and_clause_id(regulation_doc_id, reg_clause_id_val)
+            reg_clause = store.get_clause_by_doc_and_clause_id(session_id, regulation_doc_id, reg_clause_id_val)
             
             if not reg_clause:
                 return None
@@ -179,6 +213,7 @@ async def assess_compliance(
             
             try:
                 return store.add_result(
+                    session_id=session_id,
                     assessment_id=assessment.id,
                     customer_clause_id=c_clause.id,
                     regulation_clause_id=reg_clause.id,
@@ -200,16 +235,18 @@ async def assess_compliance(
     return {"assessment_id": assessment.id, "results_count": len(results)}
 
 @app.get("/debug/vector-store")
-def debug_vector_store():
+def debug_vector_store(session_id: str = Depends(get_sid)):
     info = {
         "vector_store_exists": rag_engine.vector_store is not None,
-        "total_documents": len(store.documents),
-        "total_clauses": len(store.clauses),
+        "total_documents": len(store.get_session(session_id).documents),
+        "total_clauses": len(store.get_session(session_id).clauses),
+        "session_id": session_id
     }
     
     if rag_engine.vector_store is not None:
         try:
-            info["vector_store_size"] = len(rag_engine.vector_store.docstore._dict)
+            # Note: This is a hacky way to check size, might not be accurate for Pinecone
+            info["vector_store_size"] = "Dynamic (Pinecone)"
         except Exception as e:
             info["vector_store_error"] = str(e)
     
@@ -219,9 +256,10 @@ def debug_vector_store():
 async def chat_with_docs(
     query: str = Form(...),
     use_kb: bool = Form(False),
+    session_id: str = Depends(get_sid)
 ):
     # Search across documents with optional knowledge base
-    similar_docs = rag_engine.retrieve_similar_clauses(query, top_k=5, use_kb=use_kb)
+    similar_docs = rag_engine.retrieve_similar_clauses(query, top_k=5, use_kb=use_kb, session_id=session_id)
     
     if not similar_docs:
         return {"answer": "I couldn't find any relevant information in your documents. Please upload some documents first."}
@@ -231,7 +269,7 @@ async def chat_with_docs(
     for i, (d, score) in enumerate(similar_docs, 1):
         # Fallback to metadata if store is cleared (e.g. for permanent KB)
         doc_id = d.metadata.get('doc_id')
-        doc_obj = store.get_document(int(doc_id)) if doc_id else None
+        doc_obj = store.get_document(session_id, int(doc_id)) if doc_id else None
         doc_name = doc_obj.filename if doc_obj else d.metadata.get('doc_name', 'Unknown')
         clause_id = d.metadata.get('clause_id', 'N/A')
         page = d.metadata.get('page_number', 'N/A')
@@ -248,18 +286,18 @@ async def chat_with_docs(
     return {"answer": answer}
 
 @app.get("/graph/{assessment_id}")
-def get_graph_data(assessment_id: int):
-    assessment = store.get_assessment(assessment_id)
+def get_graph_data(assessment_id: int, session_id: str = Depends(get_sid)):
+    assessment = store.get_assessment(session_id, assessment_id)
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
         
-    results = store.get_results_by_assessment(assessment_id)
+    results = store.get_results_by_assessment(session_id, assessment_id)
     
     nodes = []
     edges = []
     
     # Add regulation nodes (planets)
-    reg_clauses = store.get_clauses_by_document(assessment.regulation_doc_id)
+    reg_clauses = store.get_clauses_by_document(session_id, assessment.regulation_doc_id)
     for rc in reg_clauses:
         nodes.append({
             "id": f"reg_{rc.id}",
@@ -272,7 +310,7 @@ def get_graph_data(assessment_id: int):
         
     # Add customer nodes and edges
     for r in results:
-        cust_clause = store.get_clause(r.customer_clause_id)
+        cust_clause = store.get_clause(session_id, r.customer_clause_id)
         nodes.append({
             "id": f"cust_{r.customer_clause_id}",
             "label": cust_clause.clause_id if cust_clause else str(r.customer_clause_id),
@@ -293,12 +331,12 @@ def get_graph_data(assessment_id: int):
     return {"nodes": nodes, "edges": edges}
 
 @app.get("/report/{assessment_id}")
-def generate_report(assessment_id: int):
-    assessment = store.get_assessment(assessment_id)
+def generate_report(assessment_id: int, session_id: str = Depends(get_sid)):
+    assessment = store.get_assessment(session_id, assessment_id)
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
     
-    results = store.get_results_by_assessment(assessment_id)
+    results = store.get_results_by_assessment(session_id, assessment_id)
     
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
@@ -309,8 +347,8 @@ def generate_report(assessment_id: int):
     elements.append(Spacer(1, 12))
     
     # Header info
-    customer_doc = store.get_document(assessment.customer_doc_id)
-    reg_doc = store.get_document(assessment.regulation_doc_id)
+    customer_doc = store.get_document(session_id, assessment.customer_doc_id)
+    reg_doc = store.get_document(session_id, assessment.regulation_doc_id)
     
     elements.append(Paragraph(f"Project Document: {customer_doc.filename if customer_doc else 'N/A'}", styles['Normal']))
     elements.append(Paragraph(f"Regulatory Standard: {reg_doc.filename if reg_doc else 'N/A'}", styles['Normal']))
@@ -320,7 +358,7 @@ def generate_report(assessment_id: int):
     # Table data
     data = [["Clause ID", "Status", "Risk", "Reasoning"]]
     for r in results:
-        cust_clause = store.get_clause(r.customer_clause_id)
+        cust_clause = store.get_clause(session_id, r.customer_clause_id)
         reasoning = r.reasoning
         data.append([
             cust_clause.clause_id if cust_clause else f"Clause {r.customer_clause_id}",

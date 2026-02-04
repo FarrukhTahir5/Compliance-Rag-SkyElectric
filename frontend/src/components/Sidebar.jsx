@@ -301,14 +301,16 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
                                     />
                                     <FileText size={18} color={isSelected ? '#fff' : '#888'} />
                                     <div style={{ overflow: 'hidden', flex: 1 }}>
-                                        <div style={{
-                                            fontSize: '14px',
-                                            fontWeight: isSelected ? 600 : 500,
-                                            overflow: 'hidden',
-                                            textOverflow: 'ellipsis',
-                                            whiteSpace: 'nowrap'
-                                        }}>
-                                            {f.filename}
+                                        <div
+                                            title={f.filename}
+                                            style={{
+                                                fontSize: '14px',
+                                                fontWeight: isSelected ? 600 : 500,
+                                                overflow: 'hidden',
+                                                textOverflow: 'ellipsis',
+                                                whiteSpace: 'nowrap'
+                                            }}
+                                        >
                                             <span style={{
                                                 background: '#a855f7',
                                                 color: '#fff',
@@ -316,11 +318,12 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
                                                 borderRadius: '4px',
                                                 fontSize: '10px',
                                                 fontWeight: 800,
-                                                marginLeft: '8px',
+                                                marginRight: '8px',
                                                 boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
                                             }}>
                                                 ID: {f.id}
                                             </span>
+                                            {f.filename}
                                         </div>
                                     </div>
                                     <button

@@ -144,7 +144,7 @@ def parse_docx(file_content: bytes, filename: str) -> List[Dict]:
     return clauses
 
 
-def parse_document(file_content: bytes, filename: str, file_type: str, version: str = "1.0", namespace: str = "session") -> int:
+def parse_document(file_content: bytes, filename: str, file_type: str, version: str = "1.0", namespace: str = None, session_id: str = None) -> int:
     """
     Parse a document (PDF, DOCX, or XLSX) and store in memory.
     Returns the document ID.
@@ -162,12 +162,13 @@ def parse_document(file_content: bytes, filename: str, file_type: str, version: 
         raise ValueError(f"Unsupported file type: {filename}")
     
     # Add document to in-memory store
-    doc = store.add_document(filename=filename, file_type=file_type, version=version)
+    doc = store.add_document(session_id=session_id, filename=filename, file_type=file_type, version=version)
     
     # Add clauses to store and prepare for vector ingestion
     ingest_clauses = []
     for c in clauses:
         store.add_clause(
+            session_id=session_id,
             document_id=doc.id,
             clause_id=c['clause_id'],
             text=c['text'],
@@ -186,6 +187,6 @@ def parse_document(file_content: bytes, filename: str, file_type: str, version: 
     # Ingest all documents into Vector DB (not just regulations)
     # This enables chatting with any uploaded document
     if ingest_clauses:
-        rag_engine.ingest_documents(ingest_clauses, namespace=namespace)
+        rag_engine.ingest_documents(ingest_clauses, session_id=session_id, namespace=namespace)
     
     return doc.id

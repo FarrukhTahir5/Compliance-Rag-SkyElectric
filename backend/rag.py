@@ -39,10 +39,18 @@ class RAGEngine:
             print("DEBUG: Using in-memory FAISS (Pinecone not configured)")
             self.vector_store = None
 
-    def ingest_documents(self, clauses: List[Dict], namespace: str = "session"):
+    def get_session_namespace(self, session_id: str) -> str:
+        """Helper to generate session-specific namespace."""
+        return f"session_{session_id}"
+
+    def ingest_documents(self, clauses: List[Dict], session_id: str = None, namespace: str = None):
         """Ingest documents into vector store."""
         if not clauses:
             return None
+            
+        # Determine namespace
+        if not namespace:
+            namespace = self.get_session_namespace(session_id) if session_id else "session"
             
         texts = [c['text'] for c in clauses]
         metadatas = [
@@ -78,8 +86,11 @@ class RAGEngine:
         
         return self.vector_store
 
-    def clear_index(self, namespace: str = "session"):
+    def clear_index(self, session_id: str = None, namespace: str = None):
         """Clear a specific namespace in the vector index."""
+        if not namespace:
+            namespace = self.get_session_namespace(session_id) if session_id else "session"
+            
         if self.use_pinecone:
             try:
                 from pinecone import Pinecone
@@ -94,11 +105,12 @@ class RAGEngine:
         else:
             self.vector_store = None
 
-    def retrieve_similar_clauses(self, query_text: str, top_k: int = 5, doc_id: int = None, use_kb: bool = False):
+    def retrieve_similar_clauses(self, query_text: str, top_k: int = 5, doc_id: int = None, use_kb: bool = False, session_id: str = None):
         if self.vector_store is None:
             return []
             
-        namespaces = ["session"]
+        session_ns = self.get_session_namespace(session_id) if session_id else "session"
+        namespaces = [session_ns]
         if use_kb:
             namespaces.append("permanent")
             
