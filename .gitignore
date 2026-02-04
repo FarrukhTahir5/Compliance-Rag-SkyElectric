@@ -21,4 +21,4 @@ frontend/.env
 .DS_Store
 Thumbs.db
 
- backend/storage/*
+backend/storage/*
