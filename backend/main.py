@@ -1,5 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 from .models import store, Document, Clause, Assessment, AssessmentResult
 from .ingestion import parse_document
@@ -387,7 +389,24 @@ def generate_report(assessment_id: int, session_id: str = Depends(get_sid)):
         "Content-Disposition": f"attachment; filename=compliance_report_{assessment_id}.pdf"
     })
 
+# Mount the frontend static files
+# Make sure to build the frontend first: npm run build
+DIST_PATH = "frontend/dist"
+if os.path.exists(DIST_PATH):
+    app.mount("/assets", StaticFiles(directory=f"{DIST_PATH}/assets"), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        # Serve the file if it exists, otherwise serve index.html for SPA routing
+        local_path = os.path.join(DIST_PATH, full_path)
+        if full_path != "" and os.path.exists(local_path):
+            return FileResponse(local_path)
+        return FileResponse(os.path.join(DIST_PATH, "index.html"))
+else:
+    print(f"WARNING: Static files not found at {DIST_PATH}. Frontend will not be served.")
+
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
+    # Changed default port from 8000 to 5001 as requested
+    port = int(os.environ.get("PORT", 5001))
     uvicorn.run(app, host="0.0.0.0", port=port)
