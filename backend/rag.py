@@ -19,7 +19,10 @@ else:
 class RAGEngine:
     def __init__(self):
         # Using Gemini-2.0-flash-lite for enhanced performance and efficiency
-        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+        self.embeddings = GoogleGenerativeAIEmbeddings(
+            model="models/gemini-embedding-001",
+            output_dimensionality=768
+        )
         self.llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-lite", temperature=0)
         self.use_pinecone = USE_PINECONE
         self.index_name = os.getenv("PINECONE_INDEX_NAME", "compliance-rag")
