@@ -16,10 +16,10 @@ const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
 
     const formatTime = (timestamp) => {
         if (!timestamp) return '';
-        return new Date(timestamp).toLocaleTimeString([], { 
-            hour: '2-digit', 
+        return new Date(timestamp).toLocaleTimeString([], {
+            hour: '2-digit',
             minute: '2-digit',
-            hour12: true 
+            hour12: true
         });
     };
 
@@ -125,7 +125,7 @@ const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
             }}>
                 {messages.length === 0 && (
                     <div style={{ textAlign: 'center', marginTop: isFullScreen ? '40px' : '20px', padding: '0 20px' }}>
-                        <img src={logo} alt="SkyChat Logo" style={{ width: '80px', height: '80px', marginBottom: '24px' }} />
+                        <img src={logo} alt="SkyChat Logo" style={{ width: '100px', height: '80px', marginBottom: '0px' }} />
                         <h1 style={{ fontSize: isFullScreen ? '32px' : '24px', fontWeight: 'bold', color: '#111827', marginBottom: '8px' }}>
                             Welcome to SkyCompliance
                         </h1>
@@ -158,6 +158,7 @@ const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
                                     <div style={{
                                         width: '40px',
                                         marginTop: '20px',
+                                        marginLeft: '10px',
                                         height: '40px',
                                         borderRadius: '10px',
                                         background: '#ffffff',
