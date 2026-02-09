@@ -14,6 +14,15 @@ const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
     const [loading, setLoading] = useState(false);
     const scrollRef = useRef();
 
+    const formatTime = (timestamp) => {
+        if (!timestamp) return '';
+        return new Date(timestamp).toLocaleTimeString([], { 
+            hour: '2-digit', 
+            minute: '2-digit',
+            hour12: true 
+        });
+    };
+
     useEffect(() => {
         if (scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -23,7 +32,7 @@ const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
     const handleSend = async () => {
         if (!input.trim() || loading) return;
 
-        const userMsg = { role: 'user', content: input };
+        const userMsg = { role: 'user', content: input, timestamp: new Date() };
         setMessages(prev => [...prev, userMsg]);
         setInput('');
         setLoading(true);
@@ -34,9 +43,9 @@ const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
             formData.append('use_kb', useKb);
             const res = await axios.post(`${API_BASE}/chat`, formData);
 
-            setMessages(prev => [...prev, { role: 'bot', content: res.data.answer }]);
+            setMessages(prev => [...prev, { role: 'bot', content: res.data.answer, timestamp: new Date() }]);
         } catch (e) {
-            setMessages(prev => [...prev, { role: 'bot', content: "Failed to connect to the AI analyst. Is the backend running?" }]);
+            setMessages(prev => [...prev, { role: 'bot', content: "Failed to connect to the AI analyst. Is the backend running?", timestamp: new Date() }]);
         } finally {
             setLoading(false);
         }
@@ -178,17 +187,34 @@ const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
                         style={{
                             alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
                             maxWidth: '85%',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '4px'
+                        }}
+                    >
+                        <div style={{
                             padding: isFullScreen ? '12px 20px' : '10px 14px',
                             borderRadius: m.role === 'user' ? '20px 20px 4px 20px' : '20px 20px 20px 4px',
                             background: m.role === 'user' ? '#2563eb' : '#f3f4f6',
                             color: m.role === 'user' ? '#ffffff' : '#1f2937',
                             fontSize: isFullScreen ? '15px' : '14px',
                             lineHeight: 1.5,
-                        }}
-                    >
-                        {m.content}
+                        }}>
+                            {m.content}
+                        </div>
+                        {m.timestamp && (
+                            <div style={{
+                                fontSize: '11px',
+                                color: '#9ca3af',
+                                alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+                                marginTop: '2px',
+                                paddingLeft: m.role === 'user' ? '0' : '8px',
+                                paddingRight: m.role === 'user' ? '8px' : '0'
+                            }}>
+                                {formatTime(m.timestamp)}
+                            </div>
+                        )}
                     </motion.div>
-
                 ))}
                 {loading && (
                     <div style={{ alignSelf: 'flex-start', padding: '12px 18px', borderRadius: '16px 16px 16px 0', background: 'rgba(255,255,255,0.08)' }}>
