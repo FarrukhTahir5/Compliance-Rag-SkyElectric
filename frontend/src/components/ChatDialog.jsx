@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { MessageSquare, Send, X, Bot, User, Maximize2, Minimize2, Zap, Shield, Globe } from 'lucide-react';
+import { MessageSquare, Send, X, Bot, User, Maximize2, Minimize2, Zap, Shield, Globe, PlusSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import logo from '../assets/cleanlogo.png';
@@ -8,9 +8,8 @@ import ReactiveBackground from './ReactiveBackground';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
-const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
+const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages, onSaveChat }) => {
     const [isOpen, setIsOpen] = useState(false);
-    const [messages, setMessages] = useState([]);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
     const [animationState, setAnimationState] = useState('idle');
@@ -115,11 +114,16 @@ const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
                         SkyEngineering AI
                     </span>
                 </div>
+                <div>
                 {!isFullScreen && (
                     <button onClick={() => setIsOpen(false)} style={{ background: 'transparent', border: 'none', color: '#6b7280', cursor: 'pointer' }}>
                         <X size={20} />
                     </button>
                 )}
+                <button onClick={onSaveChat} style={{ background: 'transparent', border: 'none', color: '#6b7280', cursor: 'pointer' }}>
+                    <PlusSquare size={20} />
+                </button>
+                </div>
 
             </div>
 

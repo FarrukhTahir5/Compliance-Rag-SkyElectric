@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
-const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeClick, assessmentId, mode, useKb }) => {
+const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeClick, assessmentId, mode, useKb, children }) => {
     const [files, setFiles] = useState([]);
     const [uploading, setUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
@@ -361,6 +361,8 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
                         );
                     })}
                 </div>
+
+                {children}
 
                 {isGraphMode && (
                     <div style={{ marginTop: '20px' }}>

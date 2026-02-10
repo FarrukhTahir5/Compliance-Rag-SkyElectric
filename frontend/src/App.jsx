@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import ChatDialog from './components/ChatDialog';
+import Sidebar from './components/Sidebar';
+import ChatHistory from './components/ChatHistory';
 
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
@@ -12,6 +14,28 @@ function App() {
   const [assessmentId, setAssessmentId] = useState(null);
   const [mode, setMode] = useState('chat'); // Simplified to chat mode
   const [useKb, setUseKb] = useState(true); // Enabled by default as requested
+  const [messages, setMessages] = useState([]);
+  const [chatHistory, setChatHistory] = useState([]);
+
+  useEffect(() => {
+    const savedHistory = localStorage.getItem('chatHistory');
+    if (savedHistory) {
+      setChatHistory(JSON.parse(savedHistory));
+    }
+  }, []);
+
+  const handleLoadHistory = (chat) => {
+    setMessages(chat);
+  };
+
+  const handleSaveChat = () => {
+    if (messages.length > 0) {
+      const newHistory = [...chatHistory, messages];
+      setChatHistory(newHistory);
+      localStorage.setItem('chatHistory', JSON.stringify(newHistory));
+      setMessages([]);
+    }
+  };
 
 
   // Multi-session management
@@ -68,13 +92,29 @@ function App() {
   return (
     <div style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden', background: '#f9fafb' }}>
 
-
+      <Sidebar
+        onAssessmentComplete={handleAssessmentComplete}
+        selectedNode={selectedNode}
+        onStartAnalysis={handleStartAnalysis}
+        onNodeClick={handleNodeClick}
+        assessmentId={assessmentId}
+        mode={mode}
+        useKb={useKb}
+      >
+        <ChatHistory history={chatHistory} onLoadHistory={handleLoadHistory} />
+      </Sidebar>
       <main style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
 
 
         <div style={{ flex: 1, position: 'relative' }}>
           <div style={{ width: '100%', height: '100%', padding: '40px', display: 'flex', justifyContent: 'center' }}>
-            <ChatDialog isFullScreen={true} useKb={useKb} />
+            <ChatDialog
+              isFullScreen={true}
+              useKb={useKb}
+              messages={messages}
+              setMessages={setMessages}
+              onSaveChat={handleSaveChat}
+            />
           </div>
         </div>
       </main>
