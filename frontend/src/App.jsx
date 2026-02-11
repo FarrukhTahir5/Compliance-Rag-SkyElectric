@@ -3,11 +3,14 @@ import axios from 'axios';
 import ChatDialog from './components/ChatDialog';
 import Sidebar from './components/Sidebar';
 import ChatHistory from './components/ChatHistory';
+import AuthForm from './components/AuthForm';
 
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
 function App() {
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [graphData, setGraphData] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -24,11 +27,79 @@ function App() {
   };
 
   useEffect(() => {
+    // Check if user is already logged in
+    const savedUser = localStorage.getItem('user');
+    const savedToken = localStorage.getItem('token');
+    if (savedUser && savedToken) {
+      setUser(JSON.parse(savedUser));
+      setToken(savedToken);
+      syncChatsWithBackend(savedToken);
+    }
+
     const savedHistory = localStorage.getItem('chatHistory');
     if (savedHistory) {
       setChatHistory(JSON.parse(savedHistory));
     }
   }, []);
+
+  const handleAuthSuccess = async (authData) => {
+    const { user: userData, access_token } = authData;
+    setUser(userData);
+    setToken(access_token);
+    localStorage.setItem('user', JSON.stringify(userData));
+    localStorage.setItem('token', access_token);
+
+    // Sync chats after login
+    await syncChatsWithBackend(access_token);
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    setToken(null);
+    localStorage.removeItem('user');
+    localStorage.removeItem('token');
+    setChatHistory([]);
+    setMessages([]);
+    setSelectedChatIndex(null);
+  };
+
+  const syncChatsWithBackend = async (authToken) => {
+    const currentToken = authToken || token;
+    if (!currentToken) return;
+
+    try {
+      const res = await axios.get(`${API_BASE}/chats`, {
+        headers: { Authorization: `Bearer ${currentToken}` }
+      });
+      const backendChats = res.data.map(chat => chat.messages);
+
+      // Merge with local history if any
+      const localHistory = JSON.parse(localStorage.getItem('chatHistory') || '[]');
+      if (localHistory.length > 0) {
+        // Simple migration: upload all local chats to backend
+        for (const chatMsgs of localHistory) {
+          const chatData = {
+            id: crypto.randomUUID(),
+            title: chatMsgs[0]?.content?.substring(0, 30) || 'New Chat',
+            messages: chatMsgs.map(m => ({ role: m.role, content: m.content }))
+          };
+          await axios.post(`${API_BASE}/chats`, chatData, {
+            headers: { Authorization: `Bearer ${currentToken}` }
+          });
+        }
+        localStorage.removeItem('chatHistory');
+        // Refresh from backend
+        const refreshed = await axios.get(`${API_BASE}/chats`, {
+          headers: { Authorization: `Bearer ${currentToken}` }
+        });
+        setChatHistory(refreshed.data.map(chat => chat.messages));
+      } else {
+        setChatHistory(backendChats);
+      }
+    } catch (err) {
+      console.error("Sync failed", err);
+    }
+  };
 
   const handleLoadHistory = (chat, index) => {
     // Save current chat before loading a different one (if not empty and not already saved)
@@ -37,7 +108,7 @@ function App() {
       setChatHistory(newHistory);
       localStorage.setItem('chatHistory', JSON.stringify(newHistory));
     }
-    
+
     setMessages(chat);
     setSelectedChatIndex(index);
   };
@@ -71,9 +142,23 @@ function App() {
         }
       }
       setChatHistory(newHistory);
-      localStorage.setItem('chatHistory', JSON.stringify(newHistory));
+      if (!user) {
+        localStorage.setItem('chatHistory', JSON.stringify(newHistory));
+      } else {
+        // Sync to backend
+        const currentChatId = sessionStorage.getItem('current_chat_id') || crypto.randomUUID();
+        sessionStorage.setItem('current_chat_id', currentChatId);
+
+        axios.post(`${API_BASE}/chats`, {
+          id: currentChatId,
+          title: messages[0]?.content?.substring(0, 30) || 'New Chat',
+          messages: messages.map(m => ({ role: m.role, content: m.content }))
+        }, {
+          headers: { Authorization: `Bearer ${token}` }
+        }).catch(err => console.error("Auto-sync failed", err));
+      }
     }
-  }, [messages, selectedChatIndex, chatHistory]);
+  }, [messages, selectedChatIndex, chatHistory, user, token]);
 
   useEffect(() => {
     const handleBeforeUnload = (event) => {
@@ -104,6 +189,9 @@ function App() {
     // Set up global axios interceptor
     const interceptor = axios.interceptors.request.use((config) => {
       config.headers['X-Session-ID'] = sid;
+      if (token) {
+        config.headers['Authorization'] = `Bearer ${token}`;
+      }
       return config;
     });
 
@@ -157,6 +245,32 @@ function App() {
           useKb={useKb}
           toggleSidebar={toggleSidebar}
         >
+          <div style={{ padding: '0 15px' }}>
+            {!user ? (
+              <AuthForm onAuthSuccess={handleAuthSuccess} />
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <img src={user.picture} alt={user.name} style={{ width: '32px', height: '32px', borderRadius: '50%' }} />
+                  <span style={{ fontSize: '14px', fontWeight: 600, color: '#374151' }}>{user.name}</span>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: '12px',
+                    background: '#ef4444',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Logout
+                </button>
+              </div>
+            )}
+          </div>
           <ChatHistory history={chatHistory} onLoadHistory={handleLoadHistory} />
         </Sidebar>
       )}

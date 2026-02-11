@@ -6,7 +6,14 @@ from contextlib import asynccontextmanager
 from .models import store, Document, Clause, Assessment, AssessmentResult
 from .ingestion import parse_document
 from .rag import rag_engine
+from .database import engine, init_db, get_db, User, ChatSession, ChatMessage
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
+from pydantic import BaseModel, EmailStr
+from typing import List, Optional
+import bcrypt
+from jose import JWTError, jwt
+from fastapi.security import OAuth2PasswordBearer
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
@@ -50,6 +57,8 @@ async def session_cleanup_task():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize database
+    init_db()
     # Start cleanup task
     cleanup_task = asyncio.create_task(session_cleanup_task())
     yield
@@ -71,6 +80,151 @@ app.add_middleware(
 )
 
 ALLOWED_EXTENSIONS = {'.pdf', '.docx', '.xlsx'}
+
+# Security and JWT
+SECRET_KEY = os.getenv("SECRET_KEY", "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 1 week
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str
+    name: str
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+def verify_password(plain_password, hashed_password):
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+
+def get_password_hash(password):
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    user = db.query(User).filter(User.email == email).first()
+    if user is None:
+        raise credentials_exception
+    return user
+
+class ChatMessageSchema(BaseModel):
+    role: str
+    content: str
+
+class ChatSessionSchema(BaseModel):
+    id: str
+    title: str
+    messages: List[ChatMessageSchema]
+
+@app.post("/auth/register")
+async def register(user_in: UserRegister, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.email == user_in.email).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    new_user = User(
+        email=user_in.email,
+        hashed_password=get_password_hash(user_in.password),
+        name=user_in.name,
+        picture=f"https://ui-avatars.com/api/?name={user_in.name}&background=random"
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    access_token = create_access_token(data={"sub": new_user.email})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": new_user.id,
+            "email": new_user.email,
+            "name": new_user.name,
+            "picture": new_user.picture
+        }
+    }
+
+@app.post("/auth/login")
+async def login(user_in: UserLogin, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == user_in.email).first()
+    if not user or not verify_password(user_in.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+    
+    access_token = create_access_token(data={"sub": user.email})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name,
+            "picture": user.picture
+        }
+    }
+
+@app.get("/chats")
+def get_user_chats(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    sessions = db.query(ChatSession).filter(ChatSession.user_id == current_user.id).order_by(ChatSession.updated_at.desc()).all()
+    return [{
+        "id": s.id,
+        "title": s.title,
+        "updated_at": s.updated_at.isoformat(),
+        "messages": [{"role": m.role, "content": m.content} for m in s.messages]
+    } for s in sessions]
+
+@app.post("/chats")
+async def upsert_chat(chat: ChatSessionSchema, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Check if session exists
+    session = db.query(ChatSession).filter(ChatSession.id == chat.id).first()
+    if not session:
+        session = ChatSession(id=chat.id, user_id=current_user.id, title=chat.title)
+        db.add(session)
+    else:
+        # Update title if it's currently generic and we have a better one
+        if chat.title and len(chat.title) > 0:
+            session.title = chat.title
+            
+    # Clear existing messages and rewrite (simplest approach for history sync)
+    db.query(ChatMessage).filter(ChatMessage.session_id == chat.id).delete()
+    
+    for msg in chat.messages:
+        db_msg = ChatMessage(session_id=chat.id, role=msg.role, content=msg.content)
+        db.add(db_msg)
+        
+    session.updated_at = datetime.utcnow()
+    db.commit()
+    return {"status": "success"}
+
+@app.delete("/chats/{chat_id}")
+def delete_chat_session(chat_id: str, db: Session = Depends(get_db)):
+    db.query(ChatSession).filter(ChatSession.id == chat_id).delete()
+    db.commit()
+    return {"status": "deleted"}
 
 @app.post("/upload")
 async def upload_file(
