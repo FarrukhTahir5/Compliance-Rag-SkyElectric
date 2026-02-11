@@ -120,7 +120,7 @@ const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages
                         <X size={20} />
                     </button>
                 )}
-                <button onClick={onSaveChat} style={{ background: 'transparent', border: 'none', color: '#6b7280', cursor: 'pointer' }}>
+                <button onClick={onSaveChat} title="Start New Chat" style={{ background: 'transparent', border: 'none', color: '#6b7280', cursor: 'pointer' }}>
                     <PlusSquare size={20} />
                 </button>
                 </div>

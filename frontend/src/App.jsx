@@ -31,36 +31,55 @@ function App() {
   }, []);
 
   const handleLoadHistory = (chat, index) => {
+    // Save current chat before loading a different one (if not empty and not already saved)
+    if (messages.length > 0 && selectedChatIndex === null) {
+      let newHistory = [...chatHistory, messages];
+      setChatHistory(newHistory);
+      localStorage.setItem('chatHistory', JSON.stringify(newHistory));
+    }
+    
     setMessages(chat);
     setSelectedChatIndex(index);
   };
 
   const handleSaveChat = () => {
+    // This function now just starts a new chat since auto-save handles saving
     if (messages.length > 0) {
-      let newHistory;
-      if (selectedChatIndex !== null) {
-        newHistory = [...chatHistory];
-        newHistory[selectedChatIndex] = messages;
-      } else {
-        newHistory = [...chatHistory, messages];
-      }
-      setChatHistory(newHistory);
-      localStorage.setItem('chatHistory', JSON.stringify(newHistory));
       setMessages([]);
       setSelectedChatIndex(null);
     }
   };
 
+  // Auto-save messages to history whenever messages change
+  useEffect(() => {
+    if (messages.length > 0) {
+      let newHistory;
+      if (selectedChatIndex !== null) {
+        // Update existing chat in history
+        newHistory = [...chatHistory];
+        newHistory[selectedChatIndex] = messages;
+      } else {
+        // Add new chat to history or update the most recent one
+        if (chatHistory.length > 0 && chatHistory[chatHistory.length - 1].length === 0) {
+          // Replace empty chat with current messages
+          newHistory = [...chatHistory];
+          newHistory[newHistory.length - 1] = messages;
+        } else {
+          // Add new chat to history
+          newHistory = [...chatHistory, messages];
+          setSelectedChatIndex(chatHistory.length); // Set index to the new chat
+        }
+      }
+      setChatHistory(newHistory);
+      localStorage.setItem('chatHistory', JSON.stringify(newHistory));
+    }
+  }, [messages, selectedChatIndex, chatHistory]);
+
   useEffect(() => {
     const handleBeforeUnload = (event) => {
-      if (messages.length > 0) {
-        let newHistory;
-        if (selectedChatIndex !== null) {
-          newHistory = [...chatHistory];
-          newHistory[selectedChatIndex] = messages;
-        } else {
-          newHistory = [...chatHistory, messages];
-        }
+      // Auto-save is now handled by the messages useEffect, so this is just a backup
+      if (messages.length > 0 && selectedChatIndex === null) {
+        let newHistory = [...chatHistory, messages];
         localStorage.setItem('chatHistory', JSON.stringify(newHistory));
       }
     };
