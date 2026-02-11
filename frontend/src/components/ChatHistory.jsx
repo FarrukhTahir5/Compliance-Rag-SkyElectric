@@ -1,58 +1,97 @@
 import React from 'react';
-import { Clock, Plus } from 'lucide-react';
+import { Clock, Plus, MessageSquare, Calendar } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 const ChatHistory = ({ history, onLoadHistory, onNewChat, selectedChatId }) => {
     return (
-        <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <h3 style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '14px', textTransform: 'uppercase', opacity: 0.6, margin: 0 }}>
-                    <Clock size={16} /> Chat History
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '1.5px', margin: 0 }}>
+                    <Clock size={14} style={{ marginBottom: '-2px' }} /> History
                 </h3>
-                <button onClick={onNewChat} style={{
-                    background: 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)',
-                    border: 'none',
-                    color: 'white',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    fontWeight: 600,
-                    padding: '5px 10px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '5px'
-                }}>
-                    <Plus size={16} /> New Chat
+                <button
+                    onClick={onNewChat}
+                    className="btn-primary"
+                    style={{
+                        padding: '6px 12px',
+                        borderRadius: '8px',
+                        fontSize: '11px',
+                        gap: '6px',
+                        boxShadow: 'none'
+                    }}
+                >
+                    <Plus size={14} /> New
                 </button>
             </div>
 
             {(!history || history.length === 0) ? (
-                <div style={{ textAlign: 'center', color: '#9ca3af', marginTop: '20px' }}>
-                    No chat history yet. Start a new chat!
+                <div style={{
+                    textAlign: 'center',
+                    color: 'var(--text-muted)',
+                    marginTop: '12px',
+                    padding: '24px 16px',
+                    background: '#f8fafc',
+                    borderRadius: '16px',
+                    border: '1px dashed #e2e8f0',
+                    fontSize: '12px'
+                }}>
+                    No logs found.
                 </div>
             ) : (
-                <ul style={{ listStyle: 'none', padding: 0, margin: 0, overflowY: 'auto', flex: 1 }}>
-                    {history.map((chat) => (
-                        <li
-                            key={chat.id}
-                            onClick={() => onLoadHistory(chat)}
-                            style={{
-                                padding: '12px',
-                                borderRadius: '8px',
-                                background: chat.id === selectedChatId ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.03)',
-                                border: chat.id === selectedChatId ? '1px solid #6366f1' : '1px solid transparent',
-                                cursor: 'pointer',
-                                marginBottom: '10px',
-                                transition: 'all 0.2s ease'
-                            }}
-                        >
-                            <div style={{ fontSize: '14px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {chat.title || 'Untitled Chat'}
-                            </div>
-                            <div style={{ fontSize: '11px', opacity: 0.5, marginTop: '4px' }}>
-                                {chat.messages.length} messages | {new Date(chat.create_time).toLocaleString()}
-                            </div>
-                        </li>
-                    ))}
-                </ul>
+                <div style={{ flex: 1, overflowY: 'auto', paddingRight: '4px' }}>
+                    <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {history.map((chat) => {
+                            const isSelected = chat.id === selectedChatId;
+                            return (
+                                <motion.li
+                                    key={chat.id}
+                                    whileHover={{ x: 4 }}
+                                    onClick={() => onLoadHistory(chat)}
+                                    style={{
+                                        padding: '12px',
+                                        borderRadius: '12px',
+                                        background: isSelected ? 'rgba(79, 70, 229, 0.05)' : '#ffffff',
+                                        border: '1px solid',
+                                        borderColor: isSelected ? 'rgba(79, 70, 229, 0.2)' : '#e2e8f0',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s ease',
+                                        boxShadow: isSelected ? '0 2px 8px rgba(79, 70, 229, 0.05)' : 'none'
+                                    }}
+                                >
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                        <div style={{
+                                            width: '32px',
+                                            height: '32px',
+                                            borderRadius: '8px',
+                                            background: isSelected ? 'var(--primary)' : '#f1f5f9',
+                                            color: isSelected ? 'white' : 'var(--text-muted)',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center'
+                                        }}>
+                                            <MessageSquare size={14} />
+                                        </div>
+                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                            <div style={{
+                                                fontSize: '13px',
+                                                fontWeight: isSelected ? 700 : 500,
+                                                color: isSelected ? 'var(--primary)' : 'var(--text-main)',
+                                                overflow: 'hidden',
+                                                textOverflow: 'ellipsis',
+                                                whiteSpace: 'nowrap'
+                                            }}>
+                                                {chat.title || 'Untitled'}
+                                            </div>
+                                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                                {chat.messages?.length || 0} nodes
+                                            </div>
+                                        </div>
+                                    </div>
+                                </motion.li>
+                            );
+                        })}
+                    </ul>
+                </div>
             )}
         </div>
     );

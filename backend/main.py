@@ -33,8 +33,8 @@ os.makedirs(STORAGE_DIR, exist_ok=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Database tables are created via create_db.py script
-    # No session cleanup task for now, as chat history is persistent
+    # Database tables are created on startup
+    models.Base.metadata.create_all(bind=engine)
     yield
 
 app = FastAPI(title="3D Compliance Intelligence API", lifespan=lifespan)
@@ -42,7 +42,7 @@ app = FastAPI(title="3D Compliance Intelligence API", lifespan=lifespan)
 # CORS setup for React frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Temporarily allow all for debugging/development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -415,7 +415,7 @@ def get_graph_data(assessment_id: int, session_id: str = Depends(get_sid)):
 
 @app.get("/report/{assessment_id}")
 def generate_report(assessment_id: int, session_id: str = Depends(get_sid)):
-    assessment = store.get_assessment(session_id, assessment.id)
+    assessment = store.get_assessment(session_id, assessment_id)
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
     

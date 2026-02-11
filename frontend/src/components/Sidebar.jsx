@@ -1,50 +1,32 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Upload, FileText, CheckCircle, AlertTriangle, XCircle, Info, Database, Download, X, ChevronsLeft, Plus } from 'lucide-react';
+import { Upload, FileText, CheckCircle, AlertTriangle, XCircle, Info, Database, Download, X, ChevronsLeft, Plus, LogOut, Settings, Layout, Menu } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import ChatHistory from './ChatHistory'; // Import ChatHistory
-import { useAuth } from '../context/AuthContext'; // Import useAuth
+import ChatHistory from './ChatHistory';
+import { useAuth } from '../context/AuthContext';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
-const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeClick, assessmentId, mode, useKb, toggleSidebar, chatHistory, onLoadHistory, onNewChat, selectedChatId }) => {
-    const { user, logout } = useAuth(); // Use useAuth hook
+const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeClick, assessmentId, mode, useKb, toggleSidebar, chatHistory, onLoadHistory, onNewChat, selectedChatId, isMobileOpen, closeMobileSidebar }) => {
+    const { user, logout } = useAuth();
     const [files, setFiles] = useState([]);
     const [uploading, setUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
     const [selectedDocs, setSelectedDocs] = useState([]);
     const [isUploadVisible, setIsUploadVisible] = useState(false);
 
-    // Color palette for file highlighting
-    const colors = [
-        { bg: '#70df27ff', border: '#21e03aff', name: 'green' },
-        { bg: '#4ecdc4', border: '#26a69a', name: 'teal' },
-        { bg: '#45b7d1', border: '#2196f3', name: 'blue' },
-        { bg: '#96ceb4', border: '#66bb6a', name: 'green' },
-        { bg: '#ffeaa7', border: '#ffeb3b', name: 'yellow' },
-        { bg: '#dda0dd', border: '#ba68c8', name: 'plum' },
-        { bg: '#fab1a0', border: '#ff7043', name: 'orange' },
-        { bg: '#fd79a8', border: '#e91e63', name: 'pink' },
-        { bg: '#a29bfe', border: '#673ab7', name: 'purple' },
-        { bg: '#6c5ce7', border: '#3f51b5', name: 'indigo' }
-    ];
-
-    const getFileColor = (index) => colors[index % colors.length];
-
     useEffect(() => {
-        if (user) { // Fetch documents only if user is logged in
+        if (user) {
             fetchDocs();
         } else {
-            setFiles([]); // Clear files if logged out
+            setFiles([]);
         }
-    }, [user]); // Re-fetch when user changes
+    }, [user]);
 
     const fetchDocs = async () => {
         try {
             const res = await axios.get(`${API_BASE}/documents`);
             setFiles(res.data);
-
-            // Auto-select all uploaded documents
             const allDocIds = res.data.map(doc => doc.id);
             setSelectedDocs(allDocIds);
         } catch (e) { console.error(e); }
@@ -53,69 +35,31 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
     const handleDelete = async (e, id) => {
         e.stopPropagation();
         if (!confirm("Delete this document?")) return;
-
-        // Optimistic update
-        const originalFiles = [...files];
-        const originalSelected = [...selectedDocs];
-        setFiles(files.filter(f => f.id !== id));
-        setSelectedDocs(selectedDocs.filter(docId => docId !== id));
-
         try {
             await axios.delete(`${API_BASE}/documents/${id}`);
             fetchDocs();
         } catch (e) {
             alert("Delete failed");
-            setFiles(originalFiles);
-            setSelectedDocs(originalSelected);
         }
-    };
-
-    const handleReset = async () => {
-        if (!confirm("This will clear ALL documents and assessments. Proceed?")) return;
-        try {
-            await axios.post(`${API_BASE}/reset`);
-            fetchDocs();
-            setSelectedDocs([]);
-            onAssessmentComplete(null);
-        } catch (e) { alert("Reset failed"); }
     };
 
     const handleUpload = async (e) => {
         const selectedFiles = Array.from(e.target.files);
         if (!selectedFiles.length) return;
-
-        for (const file of selectedFiles) {
-            const name = file.name.toLowerCase();
-            if (!name.endsWith('.pdf') && !name.endsWith('.docx')) {
-                alert("Only PDF and DOCX files are allowed.");
-                return;
-            }
-        }
-
-        if (files.length + selectedFiles.length > 10) {
-            alert("Maximum 10 documents allowed.");
-            return;
-        }
-
         setUploading(true);
         setUploadProgress(0);
-
         try {
-            const uploadPromises = selectedFiles.map(async (file, index) => {
+            for (const file of selectedFiles) {
                 const formData = new FormData();
                 formData.append('file', file);
                 formData.append('file_type', 'customer');
-
-                return await axios.post(`${API_BASE}/upload`, formData, {
-                    onUploadProgress: (progressEvent) => {
-                        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                        const totalProgress = ((index + (percentCompleted / 100)) / selectedFiles.length) * 100;
-                        setUploadProgress(Math.round(totalProgress));
+                await axios.post(`${API_BASE}/upload`, formData, {
+                    onUploadProgress: (p) => {
+                        const percent = Math.round((p.loaded * 100) / p.total);
+                        setUploadProgress(percent);
                     }
                 });
-            });
-
-            await Promise.all(uploadPromises);
+            }
             fetchDocs();
         } catch (e) {
             alert("Upload failed.");
@@ -125,429 +69,221 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
         }
     };
 
-    const handleToggleType = async (e, id, currentType) => {
-        e.stopPropagation();
-        const newType = currentType === 'regulation' ? 'customer' : 'regulation';
-
-        // Optimistic update
-        const originalFiles = [...files];
-        setFiles(files.map(f => f.id === id ? { ...f, file_type: newType } : f));
-
-        try {
-            const formData = new FormData();
-            formData.append('file_type', newType);
-            await axios.patch(`${API_BASE}/documents/${id}/type`, formData);
-        } catch (e) {
-            console.error("Failed to update type:", e);
-            setFiles(originalFiles);
-        }
-    };
-
-    const runAssessment = async () => {
-        const selectedFiles = files.filter(f => selectedDocs.includes(f.id));
-        const standards = selectedFiles.filter(f => f.file_type === 'regulation');
-        const projects = selectedFiles.filter(f => f.file_type === 'customer');
-
-        if (standards.length === 0 || projects.length === 0) {
-            alert("Analysis requires at least one Regulatory Standard and one Project Document.");
-            return;
-        }
-
-        onStartAnalysis();
-
-        try {
-            const firstDoc = standards[0];
-            const secondDoc = projects[0];
-
-            console.log(`Analyzing: Standard=${firstDoc.filename}, Project=${secondDoc.filename} | KB=${useKb}`);
-            const formData = new FormData();
-            formData.append('customer_doc_id', secondDoc.id);
-            formData.append('regulation_doc_id', firstDoc.id);
-            formData.append('use_kb', useKb);
-
-            const res = await axios.post(`${API_BASE}/assess`, formData);
-            onAssessmentComplete(res.data.assessment_id);
-        } catch (e) {
-            console.error("Assessment Error:", e);
-            const detail = e.response?.data?.detail || e.message;
-            alert(`Assessment failed: ${detail}`);
-            onAssessmentComplete(null);
-        }
-    };
-
-    const toggleDocSelection = (docId) => {
-        setSelectedDocs(prev => {
-            if (prev.includes(docId)) {
-                return prev.filter(id => id !== docId);
-            } else {
-                return [...prev, docId];
-            }
-        });
-    };
-
     const isGraphMode = mode === 'graph';
-
-    // Validation for "Analyze" button
     const selectedFiles = files.filter(f => selectedDocs.includes(f.id));
     const hasStandard = selectedFiles.some(f => f.file_type === 'regulation');
     const hasProject = selectedFiles.some(f => f.file_type === 'customer');
     const canAnalyze = hasStandard && hasProject;
 
-    return (
-        <div className="glass-panel" style={{ width: '400px', height: '100vh', padding: '24px', flexShrink: 0, borderRight: '1px solid rgba(255,255,255,0.1)', borderRadius: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
-            <button onClick={toggleSidebar} style={{
-                position: 'absolute',
-                top: '20px',
-                right: '0px', /* Changed from -20px to 0px */
-                background: 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)',
-                border: 'none',
-                color: 'white',
-                borderRadius: '50%',
-                cursor: 'pointer',
-                fontWeight: 600,
-                padding: '10px',
-                zIndex: 100,
-                width: '40px',
-                height: '40px',
+    const sidebarContent = (
+        <div
+            className="glass-panel"
+            style={{
+                width: '320px',
+                height: '100vh',
+                padding: '24px',
+                flexShrink: 0,
+                borderRadius: 0,
+                position: 'relative',
                 display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                transform: 'translateX(50%)' /* Adjust to center the button on the border */
-            }}>
-                <ChevronsLeft size={20} />
-            </button>
-            <h1 style={{ fontSize: '26px', fontWeight: 800, margin: '0 0 8px 0', background: 'linear-gradient(to right, #a855f7, #6366f1)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', letterSpacing: '-0.5px' }}>
-                SkyEngineering
-            </h1>
-            <p style={{ fontSize: '12px', opacity: 0.5, marginBottom: '24px' }}>Advanced Engineering Intelligence</p>
-
-            {user && ( // Display user info and logout only if logged in
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '20px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ fontSize: '14px', fontWeight: 600, color: '#374151' }}>{user.email}</span>
+                flexDirection: 'column',
+                background: '#ffffff',
+                boxShadow: '4px 0 24px rgba(0,0,0,0.02)'
+            }}
+        >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ width: '36px', height: '36px', background: 'var(--primary)', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px var(--primary-glow)' }}>
+                        <Layout size={20} color="white" />
                     </div>
-                    <button
-                        onClick={logout}
-                        style={{
-                            padding: '4px 8px',
-                            fontSize: '12px',
-                            background: '#ef4444',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer'
-                        }}
-                    >
-                        Logout
+                    <div>
+                        <h1 style={{ fontSize: '18px', fontWeight: 800, letterSpacing: '-0.5px', margin: 0, color: 'var(--text-main)' }}>
+                            SKYCHAT
+                        </h1>
+                        <p style={{ fontSize: '9px', opacity: 0.6, textTransform: 'uppercase', letterSpacing: '1px', margin: 0 }}>Neural Platform</p>
+                    </div>
+                </div>
+                <button
+                    onClick={toggleSidebar}
+                    className="btn-secondary mobile-hide"
+                    style={{ padding: '8px', borderRadius: '50%', width: '36px', height: '36px' }}
+                >
+                    <ChevronsLeft size={18} />
+                </button>
+                <button
+                    onClick={closeMobileSidebar}
+                    className="btn-secondary mobile-only"
+                    style={{ padding: '8px', borderRadius: '50%', width: '36px', height: '36px', border: 'none' }}
+                >
+                    <X size={20} />
+                </button>
+            </div>
+
+            {user && (
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    padding: '12px',
+                    background: '#f8fafc',
+                    borderRadius: '16px',
+                    marginBottom: '28px',
+                    border: '1px solid #e2e8f0'
+                }}>
+                    <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'linear-gradient(135deg, var(--primary), var(--accent))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '14px', color: 'white' }}>
+                        {user.email[0].toUpperCase()}
+                    </div>
+                    <div style={{ flex: 1, overflow: 'hidden' }}>
+                        <div style={{ fontSize: '13px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-main)' }}>{user.email}</div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Operative</div>
+                    </div>
+                    <button onClick={logout} style={{ background: 'transparent', border: 'none', color: '#64748b', cursor: 'pointer', padding: '6px', transition: 'color 0.2s' }} onMouseEnter={(e) => e.target.style.color = '#ef4444'} onMouseLeave={(e) => e.target.style.color = '#64748b'}>
+                        <LogOut size={16} />
                     </button>
                 </div>
             )}
 
-            <section style={{ marginBottom: '32px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', textTransform: 'uppercase', opacity: 0.6 }}>
-                        {/* <Upload size={16} /> {isGraphMode ? "Knowledge Ingestion" : "Cloud Storage"} */}
-                    </h3>
-                    <button onClick={() => setIsUploadVisible(!isUploadVisible)} style={{
-                        background: 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)',
-                        border: 'none',
-                        color: 'white',
-                        borderRadius: '8px',
-                        cursor: 'pointer',
-                        fontWeight: 600,
-                        padding: '5px 10px'
-                    }}>
-                        <Plus size={16} />
-                    </button>
-                </div>
-                {isUploadVisible && (
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px', marginTop: '12px' }}>
-                        <label className="btn-primary" style={{
-                            fontSize: '14px',
-                            textAlign: 'center',
-                            padding: '16px',
-                            background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            boxSizing: 'border-box',
-                            gap: '8px'
-                        }}>
-                            <Upload size={18} />
-                            {isGraphMode ? "UPLOAD SOURCES (Max 10)" : "UPLOAD NEW SOURCE"}
-                            <input type="file" hidden accept=".pdf,.docx" multiple={isGraphMode} onChange={(e) => handleUpload(e)} />
-                        </label>
-                        {isGraphMode && (
-                            <div style={{ fontSize: '10px', opacity: 0.6, textAlign: 'center', marginTop: '8px', padding: '10px', background: 'rgba(99, 102, 241, 0.1)', borderRadius: '6px', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
-                                💡 Toggle each file type to **Standard** (AI Reference) or **Project** (Assessment Target).
-                            </div>
-                        )}
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '28px', paddingRight: '4px' }}>
+                <section>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                        <h3 style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '1.5px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Database size={14} /> Knowledge Core
+                        </h3>
+                        <button
+                            onClick={() => setIsUploadVisible(!isUploadVisible)}
+                            className="btn-secondary"
+                            style={{ padding: '4px 10px', fontSize: '10px', fontWeight: 700, borderRadius: '8px' }}
+                        >
+                            {isUploadVisible ? 'Close' : <Plus size={14} />}
+                        </button>
                     </div>
-                )}
-            </section>
 
-            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto' }}> {/* New container for scrollable sections */}
-                <section style={{ marginBottom: '32px', flexShrink: 0 }}> {/* Asset Library section */}
-                    <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', textTransform: 'uppercase', opacity: 0.6 }}>
-                        <Database size={16} /> Asset Library
-                        {isGraphMode && selectedDocs.length > 0 && (
-                            <span style={{
-                                marginLeft: 'auto',
-                                background: 'linear-gradient(135deg, #6366f1, #a855f7)',
-                                color: 'white',
-                                padding: '2px 8px',
-                                borderRadius: '4px',
-                                fontSize: '10px',
-                                fontWeight: 'bold'
-                            }}>
-                                {selectedDocs.length} ASSETS
-                            </span>
+                    <AnimatePresence>
+                        {isUploadVisible && (
+                            <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                style={{ overflow: 'hidden', marginBottom: '16px' }}
+                            >
+                                <label className="btn-primary" style={{ fontSize: '12px', padding: '12px', width: '100%', marginBottom: '12px' }}>
+                                    <Upload size={16} /> Import Data
+                                    <input type="file" hidden accept=".pdf,.docx" multiple onChange={handleUpload} />
+                                </label>
+                            </motion.div>
                         )}
-                    </h3>
-                    <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    </AnimatePresence>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         {uploading && (
-                            <div style={{
-                                padding: '12px',
-                                borderRadius: '8px',
-                                background: 'rgba(255,255,255,0.05)',
-                                border: '1px solid rgba(255,255,255,0.1)',
-                                position: 'relative',
-                                overflow: 'hidden'
-                            }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                    <FileText size={18} color="#a855f7" className="animate-pulse" />
-                                    <div style={{ flex: 1 }}>
-                                        <div style={{ fontSize: '14px', fontWeight: 500 }}>Ingesting...</div>
-                                        <div style={{ fontSize: '11px', opacity: 0.5 }}>{uploadProgress}% completed</div>
-                                    </div>
+                            <div style={{ padding: '12px', borderRadius: '12px', background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                                <div style={{ fontSize: '11px', marginBottom: '6px', color: 'var(--primary)', fontWeight: 600 }}>Syncing... {uploadProgress}%</div>
+                                <div style={{ height: '4px', background: '#e2e8f0', borderRadius: '10px', overflow: 'hidden' }}>
+                                    <motion.div
+                                        initial={{ width: 0 }}
+                                        animate={{ width: `${uploadProgress}%` }}
+                                        style={{ height: '100%', background: 'var(--primary)' }}
+                                    />
                                 </div>
-                                <div style={{
-                                    position: 'absolute',
-                                    bottom: 0,
-                                    left: 0,
-                                    height: '2px',
-                                    background: 'linear-gradient(to right, #a855f7, #6366f1)',
-                                    width: `${uploadProgress}%`,
-                                    transition: 'width 0.2s ease-out'
-                                }}></div>
                             </div>
                         )}
-                        {files.map((f, index) => {
-                            const color = getFileColor(index);
-                            const isSelected = selectedDocs.includes(f.id);
-                            const isReg = f.file_type === 'regulation';
-
-                            return (
-                                <div
-                                    key={f.id}
-                                    onClick={() => isGraphMode && toggleDocSelection(f.id)}
-                                    style={{
-                                        padding: '12px',
-                                        borderRadius: '8px',
-                                        background: isGraphMode && isSelected
-                                            ? 'rgba(255,255,255,0.08)'
-                                            : 'rgba(255,255,255,0.03)',
-                                        border: `1px solid ${isGraphMode && isSelected ? 'rgba(168, 85, 247, 0.4)' : 'transparent'}`,
-                                        cursor: isGraphMode ? 'pointer' : 'default',
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        gap: '8px',
-                                        position: 'relative',
-                                        transition: 'all 0.2s ease'
-                                    }}
-                                >
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                        <div
-                                            style={{
-                                                width: '8px',
-                                                height: '8px',
-                                                borderRadius: '50%',
-                                                background: isReg ? '#a855f7' : '#10b981',
-                                                boxShadow: `0 0 8px ${isReg ? '#a855f7' : '#10b981'}40`,
-                                            }}
-                                        />
-                                        <FileText size={18} color={isSelected ? '#fff' : '#888'} />
-                                        <div style={{ overflow: 'hidden', flex: 1 }}>
-                                            <div
-                                                title={f.filename}
-                                                style={{
-                                                    fontSize: '14px',
-                                                    fontWeight: isSelected ? 600 : 500,
-                                                    overflow: 'hidden',
-                                                    textOverflow: 'ellipsis',
-                                                    whiteSpace: 'nowrap'
-                                                }}
-                                            >
-                                                <span style={{
-                                                    background: '#a855f7',
-                                                    color: '#fff',
-                                                    padding: '2px 6px',
-                                                    borderRadius: '4px',
-                                                    fontSize: '10px',
-                                                    fontWeight: 800,
-                                                    marginRight: '8px',
-                                                    boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
-                                                }}>
-                                                    ID: {f.id}
-                                                </span>
-                                                {f.filename}
-                                            </div>
-                                        </div>
-                                        <button
-                                            onClick={(e) => handleDelete(e, f.id)}
-                                            style={{ background: 'transparent', border: 'none', color: '#ef4444', opacity: 0.3, cursor: 'pointer', padding: '4px' }}
-                                            onMouseEnter={(e) => e.target.style.opacity = 1}
-                                            onMouseLeave={(e) => e.target.style.opacity = 0.3}
-                                        >
-                                            <XCircle size={14} />
-                                        </button>
-                                    </div>
-
-                                    {isGraphMode && (
-                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px', padding: '4px 8px', background: 'rgba(0,0,0,0.2)', borderRadius: '4px' }}>
-                                            <span style={{ fontSize: '10px', opacity: 0.6, fontWeight: 'bold' }}>
-                                                {isReg ? "⚖️ STANDARD" : "📄 PROJECT"}
-                                            </span>
-                                            <button
-                                                onClick={(e) => handleToggleType(e, f.id, f.file_type)}
-                                                style={{
-                                                    fontSize: '9px',
-                                                    background: isReg ? 'rgba(168, 85, 247, 0.2)' : 'rgba(16, 185, 129, 0.2)',
-                                                    border: `1px solid ${isReg ? '#a855f7' : '#10b981'}`,
-                                                    color: 'white',
-                                                    padding: '2px 8px',
-                                                    borderRadius: '4px',
-                                                    cursor: 'pointer'
-                                                }}
-                                            >
-                                                TOGGLE ROLE
-                                            </button>
-                                        </div>
-                                    )}
+                        {files.map((f) => (
+                            <motion.div
+                                key={f.id}
+                                initial={{ opacity: 0, x: -10 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                style={{
+                                    padding: '12px',
+                                    borderRadius: '12px',
+                                    background: '#ffffff',
+                                    border: '1px solid #e2e8f0',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '12px',
+                                    transition: 'all 0.2s ease',
+                                    boxShadow: '0 2px 4px rgba(0,0,0,0.01)'
+                                }}
+                            >
+                                <div style={{ width: '28px', height: '28px', borderRadius: '8px', background: f.file_type === 'regulation' ? 'rgba(79, 70, 229, 0.05)' : 'rgba(14, 165, 233, 0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <FileText size={14} color={f.file_type === 'regulation' ? 'var(--primary)' : 'var(--secondary)'} />
                                 </div>
-                            );
-                        })}
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontSize: '12px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-main)' }}>{f.filename}</div>
+                                </div>
+                                <button onClick={(e) => handleDelete(e, f.id)} style={{ background: 'transparent', border: 'none', color: '#cbd5e1', cursor: 'pointer', padding: '4px' }} onMouseEnter={(e) => e.target.style.color = '#ef4444'} onMouseLeave={(e) => e.target.style.color = '#cbd5e1'}>
+                                    <X size={12} />
+                                </button>
+                            </motion.div>
+                        ))}
                     </div>
                 </section>
 
-                <section style={{ flex: 1, overflowY: 'auto' }}> {/* Chat History section */}
+                <section style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                     <ChatHistory
                         history={chatHistory}
-                        onLoadHistory={onLoadHistory}
-                        onNewChat={onNewChat}
+                        onLoadHistory={(chat) => {
+                            onLoadHistory(chat);
+                            if (window.innerWidth <= 768) closeMobileSidebar();
+                        }}
+                        onNewChat={() => {
+                            onNewChat();
+                            if (window.innerWidth <= 768) closeMobileSidebar();
+                        }}
                         selectedChatId={selectedChatId}
                     />
                 </section>
             </div>
 
-            <section style={{ flexShrink: 0 }}>
-                {isGraphMode && (
-                    <div style={{ marginTop: '20px' }}>
-                        <button
-                            onClick={runAssessment}
-                            disabled={!canAnalyze}
-                            className="btn-primary"
-                            style={{
-                                width: '100%',
-                                padding: '16px',
-                                background: !canAnalyze
-                                    ? 'rgba(255,255,255,0.05)'
-                                    : 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
-                                color: !canAnalyze ? 'rgba(255,255,255,0.2)' : 'white',
-                                border: !canAnalyze ? '1px solid rgba(255,255,255,0.1)' : 'none',
-                                opacity: !canAnalyze ? 0.5 : 1
-                            }}
+            <div style={{ marginTop: 'auto', paddingTop: '20px', borderTop: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="btn-secondary" style={{ flex: 1, padding: '10px', fontSize: '11px', borderRadius: '10px' }}>
+                        <Settings size={14} /> Systems
+                    </button>
+                    <button className="btn-secondary" style={{ flex: 1, padding: '10px', fontSize: '11px', borderRadius: '10px' }}>
+                        <Info size={14} /> Help
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+
+    return (
+        <>
+            {/* Desktop Sidebar */}
+            <div className="mobile-hide">
+                <motion.div
+                    initial={{ x: -300 }}
+                    animate={{ x: 0 }}
+                    style={{ position: 'relative', zIndex: 100 }}
+                >
+                    {sidebarContent}
+                </motion.div>
+            </div>
+
+            {/* Mobile Sidebar Overlay */}
+            <AnimatePresence>
+                {isMobileOpen && (
+                    <div className="mobile-only" style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex' }}>
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={closeMobileSidebar}
+                            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(4px)' }}
+                        />
+                        <motion.div
+                            initial={{ x: -300 }}
+                            animate={{ x: 0 }}
+                            exit={{ x: -300 }}
+                            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                            style={{ position: 'relative', zIndex: 1, height: '100%' }}
                         >
-                            <span style={{ fontWeight: 800 }}>RUN SKYENGINEERING™</span>
-                        </button>
-                        {!canAnalyze && files.length > 0 && (
-                            <div style={{ fontSize: '10px', color: '#f59e0b', marginTop: '10px', textAlign: 'center', background: 'rgba(245, 158, 11, 0.05)', padding: '8px', borderRadius: '4px', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
-                                ⚠️ Requires selection of at least **1 Standard** and **1 Project** file.
-                            </div>
-                        )}
+                            {sidebarContent}
+                        </motion.div>
                     </div>
                 )}
-
-                <button
-                    onClick={handleReset}
-                    style={{ width: '100%', marginTop: '12px', padding: '10px', background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: '#ef4444', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}
-                >
-                    RESET ALL DATABASE
-                </button>
-
-                {isGraphMode && assessmentId && (
-                    <button
-                        onClick={() => window.open(`${API_BASE}/report/${assessmentId}`, '_blank')}
-                        className="btn-primary"
-                        style={{
-                            width: '100%',
-                            marginTop: '24px',
-                            padding: '14px',
-                            background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '8px'
-                        }}
-                    >
-                        <Download size={18} />
-                        DOWNLOAD PDF REPORT
-                    </button>
-                )}
-            </section>
-
-            <AnimatePresence>
-                {isGraphMode && selectedNode && (
-                    <motion.section
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: 20 }}
-                        className="glass-panel"
-                        style={{ padding: '20px', background: 'rgba(255,255,255,0.03)' }}
-                    >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-                            {selectedNode.status === 'COMPLIANT' ? <CheckCircle color="#10b981" size={24} /> : selectedNode.status === 'PARTIAL' ? <AlertTriangle color="#f59e0b" size={24} /> : selectedNode.status === 'NON_COMPLIANT' ? <XCircle color="#ef4444" size={24} /> : <Info color="#6366f1" size={24} />}
-                            <h3 style={{ margin: 0, flex: 1 }}>Clause {selectedNode.label}</h3>
-                            {selectedNode.page && (
-                                <span style={{ fontSize: '11px', background: 'rgba(255,255,255,0.1)', padding: '2px 8px', borderRadius: '4px', marginRight: '8px' }}>
-                                    PAGE {selectedNode.page}
-                                </span>
-                            )}
-                            <button onClick={() => onNodeClick(null)} style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', opacity: 0.7 }}><X size={16} /></button>
-                        </div>
-
-                        <div style={{ marginBottom: '20px' }}>
-                            <span style={{ fontSize: '11px', opacity: 0.5, textTransform: 'uppercase', display: 'block', marginBottom: '4px' }}>AI Reasoning</span>
-                            <p style={{ fontSize: '14px', opacity: 0.8, lineHeight: 1.6, margin: 0 }}>
-                                {selectedNode.reasoning || selectedNode.text}
-                            </p>
-                        </div>
-
-                        {selectedNode.evidence && selectedNode.evidence !== 'N/A' && (
-                            <div style={{ marginBottom: '20px', padding: '12px', background: 'rgba(0,0,0,0.2)', borderLeft: '3px solid #6366f1', borderRadius: '4px' }}>
-                                <span style={{ fontSize: '11px', opacity: 0.5, textTransform: 'uppercase', display: 'block', marginBottom: '4px', color: '#6366f1' }}>Literal Evidence Citation</span>
-                                <p style={{ fontSize: '13px', fontStyle: 'italic', opacity: 0.9, margin: 0 }}>
-                                    "{selectedNode.evidence}"
-                                </p>
-                            </div>
-                        )}
-
-                        {selectedNode.risk && (
-                            <div style={{ display: 'flex', gap: '24px' }}>
-                                <div>
-                                    <span style={{ fontSize: '11px', opacity: 0.5, textTransform: 'uppercase' }}>Risk Level</span>
-                                    <div style={{ color: selectedNode.risk === 'HIGH' ? '#ef4444' : selectedNode.risk === 'MEDIUM' ? '#f59e0b' : '#10b981', fontWeight: 'bold' }}>{selectedNode.risk}</div>
-                                </div>
-                                <div>
-                                    <span style={{ fontSize: '11px', opacity: 0.5, textTransform: 'uppercase' }}>Status</span>
-                                    <div style={{ color: selectedNode.status === 'COMPLIANT' ? '#10b981' : selectedNode.status === 'PARTIAL' ? '#f59e0b' : '#ef4444', fontWeight: 'bold' }}>{selectedNode.status}</div>
-                                </div>
-                            </div>
-                        )}
-                    </motion.section>
-                )}
             </AnimatePresence>
-        </div>
+        </>
     );
 };
 

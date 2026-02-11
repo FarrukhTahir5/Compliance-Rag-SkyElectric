@@ -23,7 +23,7 @@ def get_chat_sessions(db: Session, user_id: int, skip: int = 0, limit: int = 100
     return db.query(models.ChatSession).filter(models.ChatSession.user_id == user_id).offset(skip).limit(limit).all()
 
 def create_user_chat_session(db: Session, session: schemas.ChatSessionCreate, user_id: int):
-    db_session = models.ChatSession(**session.dict(), user_id=user_id)
+    db_session = models.ChatSession(**session.model_dump(), user_id=user_id)
     db.add(db_session)
     db.commit()
     db.refresh(db_session)
@@ -33,7 +33,7 @@ def get_chat_messages(db: Session, session_id: int, skip: int = 0, limit: int = 
     return db.query(models.ChatMessage).filter(models.ChatMessage.session_id == session_id).offset(skip).limit(limit).all()
 
 def create_chat_message(db: Session, message: schemas.ChatMessageCreate, session_id: int):
-    db_message = models.ChatMessage(**message.dict(), session_id=session_id)
+    db_message = models.ChatMessage(**message.model_dump(), session_id=session_id)
     db.add(db_message)
     db.commit()
     db.refresh(db_message)

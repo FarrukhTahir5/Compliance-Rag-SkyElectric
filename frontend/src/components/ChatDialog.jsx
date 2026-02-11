@@ -1,22 +1,18 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { MessageSquare, Send, X, Bot, User, Maximize2, Minimize2, Zap, Shield, Globe } from 'lucide-react';
+import { MessageSquare, Send, X, Bot, User, Zap, Shield, Globe, Terminal, Sparkles, Menu } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import logo from '../assets/cleanlogo.png';
-import ReactiveBackground from './ReactiveBackground';
 import { useAuth } from '../context/AuthContext';
-
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
-const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages, currentChatId }) => {
+const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages, currentChatId, openMobileSidebar }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
-    const [animationState, setAnimationState] = useState('idle');
     const scrollRef = useRef();
     const { token } = useAuth();
-
 
     const formatTime = (timestamp) => {
         if (!timestamp) return '';
@@ -36,166 +32,131 @@ const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages
     const handleSend = async () => {
         if (!input.trim() || loading) return;
 
-        // If no currentChatId, we can still send the message for now
-        // The App.jsx will handle creating a session when needed
         const userMsg = { role: 'user', content: input, timestamp: new Date() };
         setMessages(prev => [...prev, userMsg]);
         setInput('');
         setLoading(true);
-        setAnimationState('thinking');
 
         try {
             const formData = new FormData();
             formData.append('query', input);
             formData.append('use_kb', useKb);
-            // The session_id for RAG endpoints is still passed via header for now
-            // This will need to be refactored to use the currentChatId from the database
-            // and associate RAG operations with that session.
             const res = await axios.post(`${API_BASE}/chat`, formData, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
+                headers: { 'Authorization': `Bearer ${token}` }
             });
 
-            setAnimationState('response');
             setMessages(prev => [...prev, { role: 'bot', content: res.data.answer, timestamp: new Date() }]);
-            // Reset to idle after response animation
-            setTimeout(() => setAnimationState('idle'), 2000);
         } catch (e) {
-            setAnimationState('idle');
-            setMessages(prev => [...prev, { role: 'bot', content: "Failed to connect to the AI analyst. Is the backend running?", timestamp: new Date() }]);
+            setMessages(prev => [...prev, { role: 'bot', content: "Neural link interrupted. Please check connection.", timestamp: new Date() }]);
         } finally {
             setLoading(false);
         }
     };
 
-
     const containerStyle = isFullScreen ? {
         width: '100%',
-        maxWidth: '1000px',
+        maxWidth: '1200px',
         height: '100%',
-        maxHeight: '800px',
-        background: '#ffffff',
-        border: '1px solid #e5e7eb',
-        borderRadius: '24px',
         display: 'flex',
         flexDirection: 'column',
-        boxShadow: '0 20px 50px rgba(0,0,0,0.05)',
-        overflow: 'hidden',
-        position: 'relative'
     } : {
-
         position: 'fixed',
         bottom: '100px',
         right: '24px',
-        width: '400px',
-        height: '500px',
-        background: 'rgba(20, 20, 25, 0.95)',
-        backdropFilter: 'blur(12px)',
-        border: '1px solid rgba(255, 255, 255, 0.1)',
-        borderRadius: '16px',
+        width: '440px',
+        maxWidth: 'calc(100vw - 48px)',
+        height: '600px',
+        maxHeight: 'calc(100vh - 120px)',
         display: 'flex',
         flexDirection: 'column',
-        boxShadow: '0 24px 48px rgba(0,0,0,0.5)',
         zIndex: 101,
         overflow: 'hidden'
     };
 
     const chatContent = (
-        <div style={containerStyle}>
+        <div className="glass-card" style={{ ...containerStyle, borderRadius: isFullScreen ? 0 : 24, border: isFullScreen ? 'none' : '1px solid var(--glass-border)', background: '#ffffff' }}>
             {/* Header */}
             <div style={{
-                padding: isFullScreen ? '24px' : '16px',
-                background: '#ffffff',
-                borderBottom: '1px solid #f3f4f6',
+                padding: '16px 24px',
+                borderBottom: '1px solid #f1f5f9',
                 display: 'flex',
                 justifyContent: 'space-between',
-                alignItems: 'center'
+                alignItems: 'center',
+                background: '#ffffff',
+                height: '72px'
             }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-
-                    <div style={{
-                        width: '10px',
-                        height: '10px',
-                        borderRadius: '50%',
-                        background: '#10b981',
-                        boxShadow: '0 0 10px #10b981'
-                    }}></div>
-                    <span style={{ fontWeight: 'bold', fontSize: isFullScreen ? '18px' : '14px', color: '#111827' }}>
-                        SkyEngineering AI
-                    </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                    <button
+                        onClick={openMobileSidebar}
+                        className="mobile-only btn-secondary"
+                        style={{ padding: '8px', border: 'none', borderRadius: '10px' }}
+                    >
+                        <Menu size={20} />
+                    </button>
+                    <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: 'rgba(79, 70, 229, 0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <Bot size={24} color="var(--primary)" />
+                    </div>
+                    <div>
+                        <span style={{ fontWeight: 800, fontSize: '15px', color: 'var(--text-main)', display: 'block' }}>
+                            Neural Gateway
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981' }} />
+                            <span style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Operational</span>
+                        </div>
+                    </div>
                 </div>
-                <div>
                 {!isFullScreen && (
-                    <button onClick={() => setIsOpen(false)} style={{ background: 'transparent', border: 'none', color: '#6b7280', cursor: 'pointer' }}>
-                        <X size={20} />
+                    <button onClick={() => setIsOpen(false)} style={{ background: '#f8fafc', border: 'none', color: '#64748b', cursor: 'pointer', padding: '8px', borderRadius: '50%' }}>
+                        <X size={18} />
                     </button>
                 )}
-                </div>
-
             </div>
 
             {/* Messages */}
             <div ref={scrollRef} style={{
                 flex: 1,
-                padding: isFullScreen ? '32px' : '16px',
+                padding: '24px',
                 overflowY: 'auto',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '16px'
+                gap: '24px',
+                background: '#fcfdfe'
             }}>
                 {messages.length === 0 && (
-                    <div style={{ textAlign: 'center', marginTop: isFullScreen ? '40px' : '20px', padding: '0 20px' }}>
-                        <img src={logo} alt="SkyChat Logo" style={{ width: '100px', height: '80px', marginBottom: '0px' }} />
-                        <h1 style={{ fontSize: isFullScreen ? '32px' : '24px', fontWeight: 'bold', color: '#111827', marginBottom: '8px' }}>
-                            Welcome to SkyEngineering
-                        </h1>
-                        <p style={{ fontSize: isFullScreen ? '18px' : '16px', color: '#6b7280', marginBottom: '38px' }}>
-                            Ask questions, get help, or just chat!
-                        </p>
+                    <div style={{ textAlign: 'center', marginTop: '40px', padding: '0 20px' }}>
+                        <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}>
+                            <img src={logo} alt="SkyChat Logo" style={{ width: '100px', opacity: 0.6, marginBottom: '20px' }} />
+                            <h2 style={{ fontSize: '24px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '12px' }}>Initialize Query Protocol</h2>
+                            <p style={{ color: 'var(--text-muted)', maxWidth: '440px', margin: '0 auto 40px', lineHeight: 1.6, fontSize: '15px' }}>
+                                Access SkyEngineering's advanced intelligence network to analyze technical compliance and engineering data.
+                            </p>
+                        </motion.div>
 
                         <div style={{
                             display: 'grid',
-                            gridTemplateColumns: 'repeat(2, 1fr)',
-                            gap: '10px',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                            gap: '12px',
                             maxWidth: '700px',
                             margin: '0 auto'
                         }}>
                             {[
-                                { title: 'Natural Conversations', desc: 'Chat naturally with our AI assistant', icon: <MessageSquare size={20} color="#6b7280" />, bg: '#f9fafb' },
-                                { title: 'Fast Responses', desc: 'Get quick and accurate answers', icon: <Zap size={20} color="#6b7280" />, bg: '#f9fafb' },
-                                { title: 'Secure & Private', desc: 'Your conversations are protected', icon: <Shield size={20} color="#6b7280" />, bg: '#f9fafb' },
-                                { title: 'Always Available', desc: '24/7 assistance whenever you need it', icon: <Globe size={20} color="#6b7280" />, bg: '#f9fafb' }
+                                { title: 'Technical Compliance', desc: 'Standard validation', icon: <Shield size={18} /> },
+                                { title: 'Engineering Insights', desc: 'Pattern logic', icon: <Sparkles size={18} /> },
+                                { title: 'Protocol Search', desc: 'Neural retrieval', icon: <Zap size={18} /> },
+                                { title: 'Global Standards', desc: 'Cross-reg data', icon: <Globe size={18} /> }
                             ].map((feature, i) => (
-                                <div key={i} style={{
-                                    display: 'flex',
-                                    alignItems: 'flex-start',
-                                    gap: '16px',
-                                    padding: '0px',
-                                    background: feature.bg,
-                                    borderRadius: '16px',
-                                    textAlign: 'left'
-                                }}>
-                                    <div style={{
-                                        width: '40px',
-                                        marginTop: '20px',
-                                        marginLeft: '10px',
-                                        height: '40px',
-                                        borderRadius: '10px',
-                                        background: '#ffffff',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        flexShrink: 0,
-                                        boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
-                                    }}>
-                                        {feature.icon}
-                                    </div>
-                                    <div>
-                                        <h4 style={{ fontSize: '16px', fontWeight: 'bold', color: '#111827', marginBottom: '4px' }}>{feature.title}</h4>
-                                        <p style={{ fontSize: '14px', color: '#6b7280', lineHeight: 1.4 }}>{feature.desc}</p>
-                                    </div>
-                                </div>
+                                <motion.div
+                                    key={i}
+                                    initial={{ opacity: 0, y: 10 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: i * 0.1 }}
+                                    style={{ padding: '16px', background: '#ffffff', borderRadius: '16px', border: '1px solid #e2e8f0', textAlign: 'left', boxShadow: '0 2px 4px rgba(0,0,0,0.01)' }}
+                                >
+                                    <div style={{ color: 'var(--primary)', marginBottom: '10px' }}>{feature.icon}</div>
+                                    <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-main)', marginBottom: '4px' }}>{feature.title}</h4>
+                                    <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{feature.desc}</p>
+                                </motion.div>
                             ))}
                         </div>
                     </div>
@@ -211,195 +172,128 @@ const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages
                             maxWidth: '85%',
                             display: 'flex',
                             flexDirection: 'column',
-                            gap: '4px'
+                            gap: '6px'
                         }}
                     >
                         <div style={{
-                            padding: isFullScreen ? '12px 20px' : '10px 14px',
-                            borderRadius: m.role === 'user' ? '20px 20px 4px 20px' : '20px 20px 20px 4px',
-                            background: m.role === 'user' ? '#2563eb' : '#f3f4f6',
-                            color: m.role === 'user' ? '#ffffff' : '#1f2937',
-                            fontSize: isFullScreen ? '15px' : '14px',
+                            padding: '14px 18px',
+                            borderRadius: m.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                            background: m.role === 'user' ? 'var(--primary)' : '#ffffff',
+                            color: m.role === 'user' ? 'white' : 'var(--text-main)',
+                            border: m.role === 'user' ? 'none' : '1px solid #e2e8f0',
+                            fontSize: '15px',
                             lineHeight: 1.5,
+                            boxShadow: m.role === 'user' ? '0 4px 12px rgba(79, 70, 229, 0.2)' : '0 2px 8px rgba(0,0,0,0.02)'
                         }}>
                             {m.content}
                         </div>
-                        {m.timestamp && (
-                            <div style={{
-                                fontSize: '11px',
-                                color: '#9ca3af',
-                                alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                                marginTop: '2px',
-                                paddingLeft: m.role === 'user' ? '0' : '8px',
-                                paddingRight: m.role === 'user' ? '8px' : '0'
-                            }}>
-                                {formatTime(m.timestamp)}
-                            </div>
-                        )}
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', opacity: 0.6 }}>
+                            {formatTime(m.timestamp)}
+                        </div>
                     </motion.div>
                 ))}
                 {loading && (
-                    <div style={{ alignSelf: 'flex-start', padding: '12px 18px', borderRadius: '16px 16px 16px 0', background: 'rgba(255,255,255,0.08)' }}>
-                        <div className="dot-flashing"></div>
+                    <div style={{ alignSelf: 'flex-start', padding: '12px 16px', borderRadius: '16px', background: '#ffffff', border: '1px solid #e2e8f0' }}>
+                        <motion.div
+                            animate={{ opacity: [0.4, 1, 0.4] }}
+                            transition={{ repeat: Infinity, duration: 1.5 }}
+                            style={{ display: 'flex', gap: '6px' }}
+                        >
+                            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--primary)' }} />
+                            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--primary)', opacity: 0.6 }} />
+                            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--primary)', opacity: 0.3 }} />
+                        </motion.div>
                     </div>
                 )}
             </div>
 
             {/* Input */}
-            <div style={{ padding: isFullScreen ? '24px' : '16px', background: '#ffffff', borderTop: '1px solid #f3f4f6' }}>
+            <div style={{ padding: '20px 24px', background: '#ffffff', borderTop: '1px solid #f1f5f9' }}>
                 <div style={{
                     display: 'flex',
                     gap: '12px',
-                    background: '#f9fafb',
-                    padding: isFullScreen ? '12px 20px' : '10px 14px',
+                    background: '#f8fafc',
+                    padding: '6px 6px 6px 16px',
                     borderRadius: '16px',
-                    border: '1px solid #e5e7eb'
+                    border: '1px solid #e2e8f0',
+                    alignItems: 'center'
                 }}>
                     <input
                         value={input}
-                        onChange={(e) => {
-                            setInput(e.target.value);
-                            if (e.target.value.trim() && animationState === 'idle') {
-                                setAnimationState('typing');
-                            } else if (!e.target.value.trim() && animationState === 'typing') {
-                                setAnimationState('idle');
-                            }
-                        }}
+                        onChange={(e) => setInput(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                        placeholder="Ask anything..."
+                        placeholder="Initialize query..."
                         style={{
                             flex: 1,
                             background: 'transparent',
                             border: 'none',
-                            color: '#111827',
+                            color: 'var(--text-main)',
                             outline: 'none',
-                            fontSize: isFullScreen ? '16px' : '14px'
+                            fontSize: '15px',
+                            padding: '10px 0'
                         }}
                     />
-
-
                     <button
                         onClick={handleSend}
-                        disabled={loading}
-                        style={{
-                            background: '#2563eb',
-                            border: 'none',
-                            color: 'white',
-                            cursor: 'pointer',
-                            opacity: loading ? 0.5 : 1,
-                            padding: '10px',
-                            borderRadius: '12px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            transition: 'all 0.2s'
-                        }}
+                        disabled={loading || !input.trim()}
+                        className="btn-primary"
+                        style={{ padding: '0', width: '40px', height: '40px', borderRadius: '12px', opacity: !input.trim() ? 0.5 : 1 }}
                     >
-                        <Send size={isFullScreen ? 20 : 18} />
+                        <Send size={18} />
                     </button>
-
                 </div>
                 {isFullScreen && (
-                    <p style={{ marginTop: '12px', fontSize: '12px', opacity: 0.4, textAlign: 'center' }}>
-                        SkyEngineering can make mistakes. Consider checking important information.
+                    <p style={{ marginTop: '12px', fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', opacity: 0.7 }}>
+                        Intelligence engine may hallucinate. Verify critical data protocols.
                     </p>
                 )}
             </div>
-
-            <style jsx="true">{`
-                .dot-flashing {
-                    position: relative;
-                    width: 6px;
-                    height: 6px;
-                    border-radius: 5px;
-                    background-color: #6366f1;
-                    color: #6366f1;
-                    animation: dot-flashing 1s infinite linear alternate;
-                    animation-delay: .5s;
-                }
-                .dot-flashing::before, .dot-flashing::after {
-                    content: '';
-                    display: inline-block;
-                    position: absolute;
-                    top: 0;
-                }
-                .dot-flashing::before {
-                    left: -12px;
-                    width: 6px;
-                    height: 6px;
-                    border-radius: 5px;
-                    background-color: #6366f1;
-                    color: #6366f1;
-                    animation: dot-flashing 1s infinite alternate;
-                    animation-delay: 0s;
-                }
-                .dot-flashing::after {
-                    left: 12px;
-                    width: 6px;
-                    height: 6px;
-                    border-radius: 5px;
-                    background-color: #6366f1;
-                    color: #6366f1;
-                    animation: dot-flashing 1s infinite alternate;
-                    animation-delay: 1s;
-                }
-                @keyframes dot-flashing {
-                    0% { background-color: #6366f1; }
-                    50%, 100% { background-color: rgba(99, 102, 241, 0.2); }
-                }
-            `}</style>
         </div>
     );
 
     if (isFullScreen) {
         return (
-            <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-                <ReactiveBackground state={animationState} />
-                <div style={{ position: 'relative', zIndex: 1, width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                    {chatContent}
-                </div>
+            <div style={{ width: '100%', height: '100%', display: 'flex', justifyContent: 'center', background: '#f8fafc' }}>
+                {chatContent}
             </div>
         );
     }
 
-
     return (
         <>
-            {/* Floating Toggle Button */}
             {!isOpen && (
-                <button
+                <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
                     onClick={() => setIsOpen(true)}
                     style={{
                         position: 'fixed',
                         bottom: '24px',
                         right: '24px',
-                        width: '60px',
-                        height: '60px',
-                        borderRadius: '50%',
-                        background: 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)',
+                        width: '64px',
+                        height: '64px',
+                        borderRadius: '20px',
+                        background: 'var(--primary)',
                         color: 'white',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        boxShadow: '0 8px 24px rgba(168, 85, 247, 0.4)',
+                        boxShadow: '0 8px 30px var(--primary-glow)',
                         cursor: 'pointer',
                         border: 'none',
-                        zIndex: 100,
-                        transition: 'transform 0.2s'
+                        zIndex: 100
                     }}
-                    onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
-                    onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
                 >
                     <MessageSquare size={28} />
-                </button>
+                </motion.button>
             )}
 
             <AnimatePresence>
                 {isOpen && (
                     <motion.div
-                        initial={{ opacity: 0, y: 20, scale: 0.9 }}
+                        initial={{ opacity: 0, y: 20, scale: 0.98 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: 20, scale: 0.9 }}
+                        exit={{ opacity: 0, y: 20, scale: 0.98 }}
                         style={{ position: 'fixed', bottom: '100px', right: '24px', zIndex: 101 }}
                     >
                         {chatContent}

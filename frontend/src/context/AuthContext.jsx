@@ -7,19 +7,18 @@ const AuthContext = createContext(null);
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
 export const AuthProvider = ({ children }) => {
-    const [user, setUser] = useState(null);
+    const [user, setUser] = useState(() => {
+        const savedUser = localStorage.getItem('user');
+        return savedUser ? JSON.parse(savedUser) : null;
+    });
     const [token, setToken] = useState(localStorage.getItem('token') || null);
     const navigate = useNavigate();
 
     useEffect(() => {
-        const savedUser = localStorage.getItem('user');
-        const savedToken = localStorage.getItem('token');
-        if (savedUser && savedToken) {
-            setUser(JSON.parse(savedUser));
-            setToken(savedToken);
-            axios.defaults.headers.common['Authorization'] = `Bearer ${savedToken}`;
+        if (token) {
+            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
         }
-    }, []);
+    }, [token]);
 
     const login = async (email, password) => {
         try {
