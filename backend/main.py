@@ -1,74 +1,43 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from contextlib import asynccontextmanager
-from .models import store, Document, Clause, Assessment, AssessmentResult
-from .ingestion import parse_document
-from .rag import rag_engine
-from .database import engine, init_db, get_db, User, ChatSession, ChatMessage
-from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
-import bcrypt
-from jose import JWTError, jwt
-from fastapi.security import OAuth2PasswordBearer
+import os
+import asyncio
+from datetime import datetime, timedelta
+from fastapi.security import OAuth2PasswordRequestForm
+
+# Project-specific imports
+from backend.database import get_db, engine
+from backend import models, schemas, crud
+from backend.auth import create_access_token, get_current_user, verify_password, get_password_hash, SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, oauth2_scheme
+
+# Existing RAG and file handling imports (will be refactored later)
+from .legacy_models import store, Document, Clause, Assessment, AssessmentResult
+from .ingestion import parse_document
+from .rag import rag_engine
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 import io
-import os
-import asyncio
-from datetime import datetime, timedelta
-from fastapi.responses import FileResponse
 import shutil
 
 # Ensure storage directory exists
 STORAGE_DIR = "backend/storage"
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
-async def session_cleanup_task():
-    """Background task to clear inactive sessions after 15 minutes."""
-    while True:
-        try:
-            await asyncio.sleep(60)  # Check every minute
-            now = datetime.utcnow()
-            sessions_to_purge = []
-            
-            for session_id, session_data in store.sessions.items():
-                if now - session_data.last_activity > timedelta(minutes=15):
-                    sessions_to_purge.append(session_id)
-            
-            for session_id in sessions_to_purge:
-                print(f"DEBUG: Purging inactive session: {session_id}")
-                # Clear from RAG (Pinecone)
-                rag_engine.clear_index(session_id=session_id)
-                # Clear from memory
-                store.reset(session_id=session_id)
-                
-                # Optionally delete physical files for this session
-                # (Files are prefixed with {doc_id}_ but we don't easily know session_id from filename)
-                # For now, we'll keep the storage cleanup simple or rely on a separate script.
-                
-        except Exception as e:
-            print(f"DEBUG: Session cleanup error: {e}")
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize database
-    init_db()
-    # Start cleanup task
-    cleanup_task = asyncio.create_task(session_cleanup_task())
+    # Database tables are created via create_db.py script
+    # No session cleanup task for now, as chat history is persistent
     yield
-    cleanup_task.cancel()
 
 app = FastAPI(title="3D Compliance Intelligence API", lifespan=lifespan)
-
-# Dependency to get session ID
-def get_sid(x_session_id: str = Header("default")):
-    return x_session_id
 
 # CORS setup for React frontend
 app.add_middleware(
@@ -81,150 +50,108 @@ app.add_middleware(
 
 ALLOWED_EXTENSIONS = {'.pdf', '.docx', '.xlsx'}
 
-# Security and JWT
-SECRET_KEY = os.getenv("SECRET_KEY", "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 1 week
+# Dependency to get session ID (for existing RAG endpoints, will be updated)
+def get_sid(x_session_id: str = Header("default")):
+    return x_session_id
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
-
-class UserRegister(BaseModel):
-    email: EmailStr
-    password: str
-    name: str
-
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-def verify_password(plain_password, hashed_password):
-    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
-
-def get_password_hash(password):
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=401,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    user = db.query(User).filter(User.email == email).first()
-    if user is None:
-        raise credentials_exception
-    return user
-
-class ChatMessageSchema(BaseModel):
-    role: str
-    content: str
-
-class ChatSessionSchema(BaseModel):
-    id: str
-    title: str
-    messages: List[ChatMessageSchema]
-
-@app.post("/auth/register")
-async def register(user_in: UserRegister, db: Session = Depends(get_db)):
-    db_user = db.query(User).filter(User.email == user_in.email).first()
+# --- User Authentication Endpoints ---
+@app.post("/auth/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
+def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    db_user = crud.get_user_by_email(db, email=user.email)
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
-    new_user = User(
-        email=user_in.email,
-        hashed_password=get_password_hash(user_in.password),
-        name=user_in.name,
-        picture=f"https://ui-avatars.com/api/?name={user_in.name}&background=random"
+    return crud.create_user(db=db, user=user)
+
+@app.post("/auth/token", response_model=schemas.Token)
+def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = crud.get_user_by_email(db, email=form_data.username)
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.email}, expires_delta=access_token_expires
     )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
-    access_token = create_access_token(data={"sub": new_user.email})
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": {
-            "id": new_user.id,
-            "email": new_user.email,
-            "name": new_user.name,
-            "picture": new_user.picture
-        }
-    }
+    return {"access_token": access_token, "token_type": "bearer"}
 
-@app.post("/auth/login")
-async def login(user_in: UserLogin, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == user_in.email).first()
-    if not user or not verify_password(user_in.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Incorrect email or password")
-    
-    access_token = create_access_token(data={"sub": user.email})
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": {
-            "id": user.id,
-            "email": user.email,
-            "name": user.name,
-            "picture": user.picture
-        }
-    }
+@app.get("/users/me", response_model=schemas.UserResponse)
+def read_users_me(current_user: models.User = Depends(get_current_user)):
+    return current_user
 
-@app.get("/chats")
-def get_user_chats(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    sessions = db.query(ChatSession).filter(ChatSession.user_id == current_user.id).order_by(ChatSession.updated_at.desc()).all()
-    return [{
-        "id": s.id,
-        "title": s.title,
-        "updated_at": s.updated_at.isoformat(),
-        "messages": [{"role": m.role, "content": m.content} for m in s.messages]
-    } for s in sessions]
+# --- Chat Session Endpoints ---
+@app.post("/users/me/sessions", response_model=schemas.ChatSessionResponse, status_code=status.HTTP_201_CREATED)
+def create_chat_session(
+    session: schemas.ChatSessionCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    return crud.create_user_chat_session(db=db, session=session, user_id=current_user.id)
 
-@app.post("/chats")
-async def upsert_chat(chat: ChatSessionSchema, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Check if session exists
-    session = db.query(ChatSession).filter(ChatSession.id == chat.id).first()
-    if not session:
-        session = ChatSession(id=chat.id, user_id=current_user.id, title=chat.title)
-        db.add(session)
-    else:
-        # Update title if it's currently generic and we have a better one
-        if chat.title and len(chat.title) > 0:
-            session.title = chat.title
-            
-    # Clear existing messages and rewrite (simplest approach for history sync)
-    db.query(ChatMessage).filter(ChatMessage.session_id == chat.id).delete()
-    
-    for msg in chat.messages:
-        db_msg = ChatMessage(session_id=chat.id, role=msg.role, content=msg.content)
-        db.add(db_msg)
-        
-    session.updated_at = datetime.utcnow()
-    db.commit()
-    return {"status": "success"}
+@app.get("/users/me/sessions", response_model=List[schemas.ChatSessionResponse])
+def read_chat_sessions(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    skip: int = 0,
+    limit: int = 100
+):
+    sessions = crud.get_chat_sessions(db=db, user_id=current_user.id, skip=skip, limit=limit)
+    return sessions
 
-@app.delete("/chats/{chat_id}")
-def delete_chat_session(chat_id: str, db: Session = Depends(get_db)):
-    db.query(ChatSession).filter(ChatSession.id == chat_id).delete()
-    db.commit()
-    return {"status": "deleted"}
+@app.get("/users/me/sessions/{session_id}", response_model=schemas.ChatSessionResponse)
+def read_chat_session(
+    session_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    db_session = db.query(models.ChatSession).filter(
+        models.ChatSession.id == session_id,
+        models.ChatSession.user_id == current_user.id
+    ).first()
+    if db_session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    return db_session
+
+# --- Chat Message Endpoints ---
+@app.post("/users/me/sessions/{session_id}/messages", response_model=schemas.ChatMessageResponse, status_code=status.HTTP_201_CREATED)
+def create_chat_message(
+    session_id: int,
+    message: schemas.ChatMessageCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    db_session = db.query(models.ChatSession).filter(
+        models.ChatSession.id == session_id,
+        models.ChatSession.user_id == current_user.id
+    ).first()
+    if db_session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    return crud.create_chat_message(db=db, message=message, session_id=session_id)
+
+@app.get("/users/me/sessions/{session_id}/messages", response_model=List[schemas.ChatMessageResponse])
+def read_chat_messages(
+    session_id: int,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    skip: int = 0,
+    limit: int = 100
+):
+    db_session = db.query(models.ChatSession).filter(
+        models.ChatSession.id == session_id,
+        models.ChatSession.user_id == current_user.id
+    ).first()
+    if db_session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    messages = crud.get_chat_messages(db=db, session_id=session_id, skip=skip, limit=limit)
+    return messages
+
+# --- Existing RAG and File Handling Endpoints (Placeholder for now) ---
+# These endpoints will need significant refactoring to integrate with the new
+# user and chat session management. For now, they are left as is, but their
+# functionality related to 'session_id' and 'store' will not work correctly
+# without further changes.
 
 @app.post("/upload")
 async def upload_file(
@@ -232,7 +159,7 @@ async def upload_file(
     file_type: str = Form(...),  # 'regulation' | 'customer'
     version: str = Form("1.0"),
     namespace: str = Form(None),
-    session_id: str = Depends(get_sid)
+    session_id: str = Depends(get_sid) # This will need to be tied to a user's chat session
 ):
     # Check file extension
     filename_lower = file.filename.lower()
@@ -488,11 +415,11 @@ def get_graph_data(assessment_id: int, session_id: str = Depends(get_sid)):
 
 @app.get("/report/{assessment_id}")
 def generate_report(assessment_id: int, session_id: str = Depends(get_sid)):
-    assessment = store.get_assessment(session_id, assessment_id)
+    assessment = store.get_assessment(session_id, assessment.id)
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
     
-    results = store.get_results_by_assessment(session_id, assessment_id)
+    results = store.get_results_by_assessment(session_id, assessment.id)
     
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)

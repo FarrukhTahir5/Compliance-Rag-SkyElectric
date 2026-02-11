@@ -1,19 +1,21 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { MessageSquare, Send, X, Bot, User, Maximize2, Minimize2, Zap, Shield, Globe, PlusSquare } from 'lucide-react';
+import { MessageSquare, Send, X, Bot, User, Maximize2, Minimize2, Zap, Shield, Globe } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import logo from '../assets/cleanlogo.png';
 import ReactiveBackground from './ReactiveBackground';
+import { useAuth } from '../context/AuthContext';
 
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
-const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages, onSaveChat }) => {
+const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages, currentChatId }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
     const [animationState, setAnimationState] = useState('idle');
     const scrollRef = useRef();
+    const { token } = useAuth();
 
 
     const formatTime = (timestamp) => {
@@ -34,6 +36,8 @@ const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages
     const handleSend = async () => {
         if (!input.trim() || loading) return;
 
+        // If no currentChatId, we can still send the message for now
+        // The App.jsx will handle creating a session when needed
         const userMsg = { role: 'user', content: input, timestamp: new Date() };
         setMessages(prev => [...prev, userMsg]);
         setInput('');
@@ -44,7 +48,14 @@ const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages
             const formData = new FormData();
             formData.append('query', input);
             formData.append('use_kb', useKb);
-            const res = await axios.post(`${API_BASE}/chat`, formData);
+            // The session_id for RAG endpoints is still passed via header for now
+            // This will need to be refactored to use the currentChatId from the database
+            // and associate RAG operations with that session.
+            const res = await axios.post(`${API_BASE}/chat`, formData, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
 
             setAnimationState('response');
             setMessages(prev => [...prev, { role: 'bot', content: res.data.answer, timestamp: new Date() }]);
@@ -120,9 +131,6 @@ const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages
                         <X size={20} />
                     </button>
                 )}
-                <button onClick={onSaveChat} title="Start New Chat" style={{ background: 'transparent', border: 'none', color: '#6b7280', cursor: 'pointer' }}>
-                    <PlusSquare size={20} />
-                </button>
                 </div>
 
             </div>

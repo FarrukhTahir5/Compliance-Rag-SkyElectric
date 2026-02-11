@@ -2,10 +2,13 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Upload, FileText, CheckCircle, AlertTriangle, XCircle, Info, Database, Download, X, ChevronsLeft, Plus } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import ChatHistory from './ChatHistory'; // Import ChatHistory
+import { useAuth } from '../context/AuthContext'; // Import useAuth
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
-const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeClick, assessmentId, mode, useKb, children, toggleSidebar }) => {
+const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeClick, assessmentId, mode, useKb, toggleSidebar, chatHistory, onLoadHistory, onNewChat, selectedChatId }) => {
+    const { user, logout } = useAuth(); // Use useAuth hook
     const [files, setFiles] = useState([]);
     const [uploading, setUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
@@ -29,8 +32,12 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
     const getFileColor = (index) => colors[index % colors.length];
 
     useEffect(() => {
-        fetchDocs();
-    }, []);
+        if (user) { // Fetch documents only if user is logged in
+            fetchDocs();
+        } else {
+            setFiles([]); // Clear files if logged out
+        }
+    }, [user]); // Re-fetch when user changes
 
     const fetchDocs = async () => {
         try {
@@ -213,6 +220,28 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
                 SkyEngineering
             </h1>
             <p style={{ fontSize: '12px', opacity: 0.5, marginBottom: '24px' }}>Advanced Engineering Intelligence</p>
+
+            {user && ( // Display user info and logout only if logged in
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '20px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '14px', fontWeight: 600, color: '#374151' }}>{user.email}</span>
+                    </div>
+                    <button
+                        onClick={logout}
+                        style={{
+                            padding: '4px 8px',
+                            fontSize: '12px',
+                            background: '#ef4444',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        Logout
+                    </button>
+                </div>
+            )}
 
             <section style={{ marginBottom: '32px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -402,7 +431,12 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
                 </section>
 
                 <section style={{ flex: 1, overflowY: 'auto' }}> {/* Chat History section */}
-                    {children}
+                    <ChatHistory
+                        history={chatHistory}
+                        onLoadHistory={onLoadHistory}
+                        onNewChat={onNewChat}
+                        selectedChatId={selectedChatId}
+                    />
                 </section>
             </div>
 

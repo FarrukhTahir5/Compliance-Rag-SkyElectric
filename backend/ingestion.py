@@ -2,7 +2,7 @@ from pypdf import PdfReader
 from io import BytesIO
 from typing import List, Dict
 import re
-from .models import store
+from .legacy_models import store
 from .rag import rag_engine
 
 # Try to import python-docx
@@ -11,6 +11,13 @@ try:
     DOCX_AVAILABLE = True
 except ImportError:
     DOCX_AVAILABLE = False
+
+# Try to import openpyxl for XLSX support
+try:
+    import openpyxl
+    XLSX_AVAILABLE = True
+except ImportError:
+    XLSX_AVAILABLE = False
 
 
 def parse_xlsx(file_content: bytes, filename: str) -> List[Dict]:

@@ -3,14 +3,24 @@ import axios from 'axios';
 import ChatDialog from './components/ChatDialog';
 import Sidebar from './components/Sidebar';
 import ChatHistory from './components/ChatHistory';
-import AuthForm from './components/AuthForm';
-
+import { Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import Login from './components/Auth/Login';
+import Register from './components/Auth/Register';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
-function App() {
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState(localStorage.getItem('token') || null);
+// ProtectedRoute component to guard routes
+const ProtectedRoute = ({ children }) => {
+  const { isAuthenticated } = useAuth();
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+  return children;
+};
+
+function AppContent() {
+  const { user, token, logout } = useAuth();
   const [graphData, setGraphData] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -19,7 +29,7 @@ function App() {
   const [useKb, setUseKb] = useState(true); // Enabled by default as requested
   const [messages, setMessages] = useState([]);
   const [chatHistory, setChatHistory] = useState([]);
-  const [selectedChatIndex, setSelectedChatIndex] = useState(null);
+  const [selectedChatId, setSelectedChatId] = useState(null); // Use chat ID instead of index
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   const toggleSidebar = () => {
@@ -27,157 +37,92 @@ function App() {
   };
 
   useEffect(() => {
-    // Check if user is already logged in
-    const savedUser = localStorage.getItem('user');
-    const savedToken = localStorage.getItem('token');
-    if (savedUser && savedToken) {
-      setUser(JSON.parse(savedUser));
-      setToken(savedToken);
-      syncChatsWithBackend(savedToken);
+    if (user && token) {
+      syncChatsWithBackend();
+    } else {
+      // Clear chat history if logged out
+      setChatHistory([]);
+      setMessages([]);
+      setSelectedChatId(null);
     }
+  }, [user, token]); // Re-sync when user or token changes
 
-    const savedHistory = localStorage.getItem('chatHistory');
-    if (savedHistory) {
-      setChatHistory(JSON.parse(savedHistory));
-    }
-  }, []);
-
-  const handleAuthSuccess = async (authData) => {
-    const { user: userData, access_token } = authData;
-    setUser(userData);
-    setToken(access_token);
-    localStorage.setItem('user', JSON.stringify(userData));
-    localStorage.setItem('token', access_token);
-
-    // Sync chats after login
-    await syncChatsWithBackend(access_token);
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-    setToken(null);
-    localStorage.removeItem('user');
-    localStorage.removeItem('token');
-    setChatHistory([]);
-    setMessages([]);
-    setSelectedChatIndex(null);
-  };
-
-  const syncChatsWithBackend = async (authToken) => {
-    const currentToken = authToken || token;
-    if (!currentToken) return;
+  const syncChatsWithBackend = async () => {
+    if (!token) return;
 
     try {
-      const res = await axios.get(`${API_BASE}/chats`, {
-        headers: { Authorization: `Bearer ${currentToken}` }
+      const res = await axios.get(`${API_BASE}/users/me/sessions`, {
+        headers: { Authorization: `Bearer ${token}` }
       });
-      const backendChats = res.data.map(chat => chat.messages);
-
-      // Merge with local history if any
-      const localHistory = JSON.parse(localStorage.getItem('chatHistory') || '[]');
-      if (localHistory.length > 0) {
-        // Simple migration: upload all local chats to backend
-        for (const chatMsgs of localHistory) {
-          const chatData = {
-            id: crypto.randomUUID(),
-            title: chatMsgs[0]?.content?.substring(0, 30) || 'New Chat',
-            messages: chatMsgs.map(m => ({ role: m.role, content: m.content }))
-          };
-          await axios.post(`${API_BASE}/chats`, chatData, {
-            headers: { Authorization: `Bearer ${currentToken}` }
-          });
-        }
-        localStorage.removeItem('chatHistory');
-        // Refresh from backend
-        const refreshed = await axios.get(`${API_BASE}/chats`, {
-          headers: { Authorization: `Bearer ${currentToken}` }
-        });
-        setChatHistory(refreshed.data.map(chat => chat.messages));
-      } else {
-        setChatHistory(backendChats);
-      }
+      setChatHistory(res.data);
     } catch (err) {
       console.error("Sync failed", err);
+      // If token is invalid, log out the user
+      if (err.response && err.response.status === 401) {
+        logout();
+      }
     }
   };
 
-  const handleLoadHistory = (chat, index) => {
-    // Save current chat before loading a different one (if not empty and not already saved)
-    if (messages.length > 0 && selectedChatIndex === null) {
-      let newHistory = [...chatHistory, messages];
-      setChatHistory(newHistory);
-      localStorage.setItem('chatHistory', JSON.stringify(newHistory));
-    }
-
-    setMessages(chat);
-    setSelectedChatIndex(index);
+  const handleLoadHistory = (chatSession) => {
+    setMessages(chatSession.messages.map(msg => ({ role: msg.role, content: msg.content })));
+    setSelectedChatId(chatSession.id);
   };
 
-  const handleSaveChat = () => {
-    // This function now just starts a new chat since auto-save handles saving
-    if (messages.length > 0) {
+  const handleNewChat = async () => {
+    if (!token) return;
+    try {
+      const newSession = await axios.post(`${API_BASE}/users/me/sessions`, {
+        title: "New Chat"
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      syncChatsWithBackend(); // Refresh sidebar with new session
       setMessages([]);
-      setSelectedChatIndex(null);
+      setSelectedChatId(newSession.data.id);
+    } catch (err) {
+      console.error("Failed to create new chat session", err);
     }
   };
 
-  // Auto-save messages to history whenever messages change
+  // Auto-save messages to backend whenever messages change
   useEffect(() => {
-    if (messages.length > 0) {
-      let newHistory;
-      if (selectedChatIndex !== null) {
-        // Update existing chat in history
-        newHistory = [...chatHistory];
-        newHistory[selectedChatIndex] = messages;
-      } else {
-        // Add new chat to history or update the most recent one
-        if (chatHistory.length > 0 && chatHistory[chatHistory.length - 1].length === 0) {
-          // Replace empty chat with current messages
-          newHistory = [...chatHistory];
-          newHistory[newHistory.length - 1] = messages;
-        } else {
-          // Add new chat to history
-          newHistory = [...chatHistory, messages];
-          setSelectedChatIndex(chatHistory.length); // Set index to the new chat
+    const saveMessagesToBackend = async () => {
+      if (messages.length > 0 && user && token) {
+        try {
+          // If no selectedChatId, create a new chat session first
+          if (!selectedChatId) {
+            const newSession = await axios.post(`${API_BASE}/users/me/sessions`, {
+              title: "New Chat"
+            }, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            setSelectedChatId(newSession.data.id);
+            
+            // Save the message to the new session
+            const lastMessage = messages[messages.length - 1];
+            await axios.post(`${API_BASE}/users/me/sessions/${newSession.data.id}/messages`, lastMessage, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+          } else {
+            // For simplicity, we'll just send the last message.
+            // A more robust solution would involve sending all new messages or diffing.
+            const lastMessage = messages[messages.length - 1];
+            await axios.post(`${API_BASE}/users/me/sessions/${selectedChatId}/messages`, lastMessage, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+          }
+          syncChatsWithBackend(); // Refresh chat history in sidebar to show updated session
+        } catch (err) {
+          console.error("Auto-sync message failed", err);
         }
       }
-      setChatHistory(newHistory);
-      if (!user) {
-        localStorage.setItem('chatHistory', JSON.stringify(newHistory));
-      } else {
-        // Sync to backend
-        const currentChatId = sessionStorage.getItem('current_chat_id') || crypto.randomUUID();
-        sessionStorage.setItem('current_chat_id', currentChatId);
-
-        axios.post(`${API_BASE}/chats`, {
-          id: currentChatId,
-          title: messages[0]?.content?.substring(0, 30) || 'New Chat',
-          messages: messages.map(m => ({ role: m.role, content: m.content }))
-        }, {
-          headers: { Authorization: `Bearer ${token}` }
-        }).catch(err => console.error("Auto-sync failed", err));
-      }
-    }
-  }, [messages, selectedChatIndex, chatHistory, user, token]);
-
-  useEffect(() => {
-    const handleBeforeUnload = (event) => {
-      // Auto-save is now handled by the messages useEffect, so this is just a backup
-      if (messages.length > 0 && selectedChatIndex === null) {
-        let newHistory = [...chatHistory, messages];
-        localStorage.setItem('chatHistory', JSON.stringify(newHistory));
-      }
     };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [messages, chatHistory, selectedChatIndex]);
+    saveMessagesToBackend();
+  }, [messages, user, token, selectedChatId]);
 
 
-  // Multi-session management
+  // Multi-session management (for RAG endpoints, will be refactored)
   React.useEffect(() => {
     // Generate or retrieve session ID
     let sid = sessionStorage.getItem('compliance_session_id');
@@ -188,7 +133,7 @@ function App() {
 
     // Set up global axios interceptor
     const interceptor = axios.interceptors.request.use((config) => {
-      config.headers['X-Session-ID'] = sid;
+      config.headers['X-Session-ID'] = sid; // This is for RAG endpoints
       if (token) {
         config.headers['Authorization'] = `Bearer ${token}`;
       }
@@ -199,7 +144,7 @@ function App() {
     return () => {
       axios.interceptors.request.eject(interceptor);
     };
-  }, []);
+  }, [token]); // Re-run if token changes
 
   const handleAssessmentComplete = async (assessmentId) => {
     if (!assessmentId) {
@@ -233,7 +178,6 @@ function App() {
 
   return (
     <div style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden', background: '#f9fafb' }}>
-
       {isSidebarOpen && (
         <Sidebar
           onAssessmentComplete={handleAssessmentComplete}
@@ -246,16 +190,13 @@ function App() {
           toggleSidebar={toggleSidebar}
         >
           <div style={{ padding: '0 15px' }}>
-            {!user ? (
-              <AuthForm onAuthSuccess={handleAuthSuccess} />
-            ) : (
+            {user && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <img src={user.picture} alt={user.name} style={{ width: '32px', height: '32px', borderRadius: '50%' }} />
-                  <span style={{ fontSize: '14px', fontWeight: 600, color: '#374151' }}>{user.name}</span>
+                  <span style={{ fontSize: '14px', fontWeight: 600, color: '#374151' }}>{user.email}</span>
                 </div>
                 <button
-                  onClick={handleLogout}
+                  onClick={logout}
                   style={{
                     padding: '4px 8px',
                     fontSize: '12px',
@@ -271,11 +212,15 @@ function App() {
               </div>
             )}
           </div>
-          <ChatHistory history={chatHistory} onLoadHistory={handleLoadHistory} />
+          <ChatHistory
+            history={chatHistory}
+            onLoadHistory={handleLoadHistory}
+            onNewChat={handleNewChat}
+            selectedChatId={selectedChatId}
+          />
         </Sidebar>
       )}
       <main style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
-
         {!isSidebarOpen && (
           <button onClick={toggleSidebar} style={{
             position: 'absolute',
@@ -300,7 +245,7 @@ function App() {
               useKb={useKb}
               messages={messages}
               setMessages={setMessages}
-              onSaveChat={handleSaveChat}
+              currentChatId={selectedChatId}
             />
           </div>
         </div>
@@ -334,6 +279,25 @@ function App() {
         }
       `}</style>
     </div>
+  );
+}
+
+function App() {
+  return (
+    <AuthProvider>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+        <Route
+          path="/*"
+          element={
+            <ProtectedRoute>
+              <AppContent />
+            </ProtectedRoute>
+          }
+        />
+      </Routes>
+    </AuthProvider>
   );
 }
 
