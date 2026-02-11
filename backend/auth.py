@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta
 from typing import Optional
+import bcrypt
 
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -11,8 +11,7 @@ from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend import models, schemas
 
-# Configuration for password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Using bcrypt directly instead of passlib to avoid compatibility issues
 
 # Secret key for JWT. In a real application, this should be loaded from environment variables.
 SECRET_KEY = "your-secret-key" # TODO: Replace with a strong, randomly generated key from environment variable
@@ -21,11 +20,58 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+def get_password_hash(password: str) -> str:
+    """Hash a password using bcrypt directly"""
+    # Ensure password is within bcrypt's 72-byte limit
+    password_bytes = password.encode('utf-8')
+    if len(password_bytes) > 72:
+        # Truncate to 72 bytes, handling UTF-8 properly
+        truncated_bytes = password_bytes[:72]
+        try:
+            password = truncated_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            # If we cut mid-character, try shorter lengths
+            for i in range(71, 68, -1):
+                try:
+                    password = password_bytes[:i].decode('utf-8')
+                    break
+                except UnicodeDecodeError:
+                    continue
+            else:
+                # Final fallback
+                password = password_bytes[:72].decode('utf-8', errors='ignore')
+    
+    # Hash the password
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+    return hashed.decode('utf-8')
 
-def get_password_hash(password):
-    return pwd_context.hash(password)
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against a hash using bcrypt directly"""
+    # Handle password length
+    password_bytes = plain_password.encode('utf-8')
+    if len(password_bytes) > 72:
+        # Truncate to 72 bytes, handling UTF-8 properly
+        truncated_bytes = password_bytes[:72]
+        try:
+            plain_password = truncated_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            # If we cut mid-character, try shorter lengths
+            for i in range(71, 68, -1):
+                try:
+                    plain_password = password_bytes[:i].decode('utf-8')
+                    break
+                except UnicodeDecodeError:
+                    continue
+            else:
+                # Final fallback
+                plain_password = password_bytes[:72].decode('utf-8', errors='ignore')
+    
+    try:
+        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+    except Exception as e:
+        print(f"Password verification error: {e}")
+        return False
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
