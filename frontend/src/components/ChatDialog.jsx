@@ -7,7 +7,7 @@ import { useAuth } from '../context/AuthContext';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
-const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages, currentChatId, openMobileSidebar }) => {
+const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages, currentChatId, openMobileSidebar, saveMessageToBackend, loadingHistory }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
@@ -37,6 +37,9 @@ const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages
         setInput('');
         setLoading(true);
 
+        // Explicitly save user message
+        await saveMessageToBackend(currentChatId, userMsg);
+
         try {
             const formData = new FormData();
             formData.append('query', input);
@@ -45,7 +48,15 @@ const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages
                 headers: { 'Authorization': `Bearer ${token}` }
             });
 
-            setMessages(prev => [...prev, { role: 'bot', content: res.data.answer, timestamp: new Date() }]);
+            const botMsg = { role: 'bot', content: res.data.answer, timestamp: new Date() };
+            setMessages(prev => [...prev, botMsg]);
+
+            // Explicitly save bot response
+            // We pass currentChatId but it might have been updated by the user message save if it was a new chat
+            // App.jsx state update for selectedChatId might not be immediate for this call, 
+            // but saveMessageToBackend in App.jsx handles the null case.
+            await saveMessageToBackend(currentChatId, botMsg);
+
         } catch (e) {
             setMessages(prev => [...prev, { role: 'bot', content: "Neural link interrupted. Please check connection.", timestamp: new Date() }]);
         } finally {
@@ -121,9 +132,31 @@ const ChatDialog = ({ isFullScreen = false, useKb = false, messages, setMessages
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '24px',
-                background: '#fcfdfe'
+                background: '#fcfdfe',
+                position: 'relative'
             }}>
-                {messages.length === 0 && (
+                {loadingHistory && (
+                    <div style={{
+                        position: 'absolute',
+                        top: 0, left: 0, right: 0, bottom: 0,
+                        background: 'rgba(255, 255, 255, 0.8)',
+                        zIndex: 10,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backdropFilter: 'blur(4px)'
+                    }}>
+                        <motion.div
+                            animate={{ rotate: 360 }}
+                            transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
+                            style={{ width: '32px', height: '32px', border: '2px solid #e2e8f0', borderTopColor: 'var(--primary)', borderRadius: '50%' }}
+                        />
+                        <span style={{ marginTop: '12px', fontSize: '13px', color: 'var(--text-muted)', fontWeight: 500 }}>Synchronizing Neural Link...</span>
+                    </div>
+                )}
+
+                {messages.length === 0 && !loadingHistory && (
                     <div style={{ textAlign: 'center', marginTop: '40px', padding: '0 20px' }}>
                         <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}>
                             <img src={logo} alt="SkyChat Logo" style={{ width: '100px', opacity: 0.6, marginBottom: '20px' }} />

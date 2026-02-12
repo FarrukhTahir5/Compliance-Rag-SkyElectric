@@ -11,14 +11,14 @@ export const AuthProvider = ({ children }) => {
         const savedUser = localStorage.getItem('user');
         return savedUser ? JSON.parse(savedUser) : null;
     });
-    const [token, setToken] = useState(localStorage.getItem('token') || null);
-    const navigate = useNavigate();
-
-    useEffect(() => {
-        if (token) {
-            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    const [token, setToken] = useState(() => {
+        const savedToken = localStorage.getItem('token');
+        if (savedToken) {
+            axios.defaults.headers.common['Authorization'] = `Bearer ${savedToken}`;
         }
-    }, [token]);
+        return savedToken;
+    });
+    const navigate = useNavigate();
 
     const login = async (email, password) => {
         try {
