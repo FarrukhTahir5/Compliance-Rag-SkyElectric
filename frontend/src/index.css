@@ -7,9 +7,9 @@
   line-height: 1.5;
   font-weight: 400;
 
-  color-scheme: light;
-  color: #111827;
-  background-color: #f9fafb;
+  color-scheme: dark;
+  color: #ffffff;
+  background-color: #020617;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -31,6 +31,8 @@ body {
   min-width: 320px;
   min-height: 100vh;
   overflow: hidden;
+  background-color: #020617;
+  -webkit-overflow-scrolling: touch;
 }
 
 #root {
@@ -96,6 +98,15 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(180deg, #00e5ff 0%, #00ffb3 100%);
+}
+
+.scroll-smooth {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+.will-change-scroll {
+  will-change: transform;
 }
 
 @keyframes pulse {

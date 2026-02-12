@@ -9,50 +9,48 @@ const ReactiveBackground = ({ state = 'idle' }) => {
     // Configuration per state
     const stateConfig = {
         idle: {
-            orbCount: 6,
-            speed: 20,
-            scale: 1,
-            colors: ['#e0e7ff', '#dbeafe', '#ede9fe', '#fce7f3'],
-            blur: 80,
-            opacity: 0.4
+            colors: ['#4f46e5', '#7c3aed', '#2563eb', '#0ea5e9'],
+            opacity: 0.2,
+            particleCount: 20
         },
         typing: {
-            orbCount: 8,
-            speed: 12,
-            scale: 1.1,
-            colors: ['#93c5fd', '#a5b4fc', '#c4b5fd', '#fbcfe8'],
-            blur: 70,
-            opacity: 0.5
+            colors: ['#3b82f6', '#2dd4bf', '#0ea5e9', '#6366f1'],
+            opacity: 0.3,
+            particleCount: 30
         },
         thinking: {
-            orbCount: 10,
-            speed: 8,
-            scale: 1.2,
-            colors: ['#60a5fa', '#818cf8', '#a78bfa', '#f472b6'],
-            blur: 60,
-            opacity: 0.6
+            colors: ['#a855f7', '#ec4899', '#f43f5e', '#8b5cf6'],
+            opacity: 0.4,
+            particleCount: 40
         },
         response: {
-            orbCount: 12,
-            speed: 5,
-            scale: 1.4,
-            colors: ['#3b82f6', '#6366f1', '#8b5cf6', '#ec4899'],
-            blur: 50,
-            opacity: 0.7
+            colors: ['#10b981', '#34d399', '#059669', '#14b8a6'],
+            opacity: 0.5,
+            particleCount: 50
         }
     };
 
     const config = stateConfig[state] || stateConfig.idle;
 
-    // Generate orb positions
-    const orbs = useMemo(() => {
-        return Array.from({ length: 12 }, (_, i) => ({
+    // Generate mesh points
+    const meshPoints = useMemo(() => {
+        return Array.from({ length: 6 }, (_, i) => ({
             id: i,
             x: Math.random() * 100,
             y: Math.random() * 100,
-            size: 100 + Math.random() * 200,
-            delay: Math.random() * 5,
-            duration: 15 + Math.random() * 10
+            size: 40 + Math.random() * 40, // in % of viewport
+            duration: 15 + Math.random() * 15
+        }));
+    }, []);
+
+    // Generate small particles
+    const particles = useMemo(() => {
+        return Array.from({ length: 50 }, (_, i) => ({
+            id: i,
+            x: Math.random() * 100,
+            y: Math.random() * 100,
+            size: 2 + Math.random() * 4,
+            duration: 10 + Math.random() * 10
         }));
     }, []);
 
@@ -66,124 +64,75 @@ const ReactiveBackground = ({ state = 'idle' }) => {
             overflow: 'hidden',
             pointerEvents: 'none',
             zIndex: 0,
-            background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 50%, #e2e8f0 100%)'
+            background: '#0f172a'
         }}>
-            {/* Animated Orbs */}
-            {orbs.slice(0, config.orbCount).map((orb) => (
+            {/* Mesh Gradient Blobs */}
+            {meshPoints.map((point, idx) => (
                 <motion.div
-                    key={orb.id}
-                    initial={{
-                        x: `${orb.x}%`,
-                        y: `${orb.y}%`,
-                        scale: 0.8
-                    }}
+                    key={`mesh-${point.id}`}
                     animate={{
-                        x: [
-                            `${orb.x}%`,
-                            `${(orb.x + 30) % 100}%`,
-                            `${(orb.x + 15) % 100}%`,
-                            `${orb.x}%`
-                        ],
-                        y: [
-                            `${orb.y}%`,
-                            `${(orb.y + 20) % 100}%`,
-                            `${(orb.y + 40) % 100}%`,
-                            `${orb.y}%`
-                        ],
-                        scale: [config.scale, config.scale * 1.1, config.scale * 0.9, config.scale]
+                        x: ['0%', '20%', '-20%', '0%'],
+                        y: ['0%', '-15%', '15%', '0%'],
+                        scale: [1, 1.2, 0.8, 1],
+                        rotate: [0, 90, 180, 270, 360]
                     }}
                     transition={{
-                        duration: orb.duration / config.speed * 20,
-                        delay: orb.delay,
+                        duration: point.duration,
                         repeat: Infinity,
-                        ease: 'easeInOut'
+                        ease: "linear"
                     }}
                     style={{
                         position: 'absolute',
-                        width: orb.size,
-                        height: orb.size,
-                        borderRadius: '50%',
-                        background: `radial-gradient(circle, ${config.colors[orb.id % config.colors.length]} 0%, transparent 70%)`,
-                        filter: `blur(${config.blur}px)`,
+                        left: `${point.x}%`,
+                        top: `${point.y}%`,
+                        width: `${point.size}vw`,
+                        height: `${point.size}vw`,
+                        background: `radial-gradient(circle, ${config.colors[idx % config.colors.length]} 0%, transparent 70%)`,
+                        filter: 'blur(80px)',
                         opacity: config.opacity,
-                        transform: 'translate(-50%, -50%)'
+                        transformOrigin: 'center center',
+                        mixBlendMode: 'screen'
                     }}
                 />
             ))}
 
-            {/* Pulse ring for thinking state */}
-            {state === 'thinking' && (
+            {/* Floating Particles */}
+            {particles.slice(0, config.particleCount).map((p) => (
                 <motion.div
-                    initial={{ scale: 0.5, opacity: 0.6 }}
+                    key={`particle-${p.id}`}
                     animate={{
-                        scale: [0.5, 1.5, 0.5],
-                        opacity: [0.6, 0, 0.6]
+                        y: ['0%', '-100%'],
+                        opacity: [0, 1, 0]
                     }}
                     transition={{
-                        duration: 2,
+                        duration: p.duration,
                         repeat: Infinity,
-                        ease: 'easeInOut'
+                        ease: "linear",
+                        delay: Math.random() * 10
                     }}
                     style={{
                         position: 'absolute',
-                        top: '50%',
-                        left: '50%',
-                        width: 300,
-                        height: 300,
+                        left: `${p.x}%`,
+                        top: `${p.y}%`,
+                        width: `${p.size}px`,
+                        height: `${p.size}px`,
+                        background: 'white',
                         borderRadius: '50%',
-                        border: '2px solid #6366f1',
-                        transform: 'translate(-50%, -50%)',
-                        pointerEvents: 'none'
+                        boxShadow: '0 0 10px rgba(255,255,255,0.8)',
                     }}
                 />
-            )}
+            ))}
 
-            {/* Burst effect for response state */}
-            {state === 'response' && (
-                <>
-                    {[0, 1, 2].map((i) => (
-                        <motion.div
-                            key={`burst-${i}`}
-                            initial={{ scale: 0, opacity: 0.8 }}
-                            animate={{
-                                scale: [0, 2],
-                                opacity: [0.8, 0]
-                            }}
-                            transition={{
-                                duration: 1.5,
-                                delay: i * 0.3,
-                                repeat: Infinity,
-                                repeatDelay: 1
-                            }}
-                            style={{
-                                position: 'absolute',
-                                top: '50%',
-                                left: '50%',
-                                width: 200,
-                                height: 200,
-                                borderRadius: '50%',
-                                background: 'radial-gradient(circle, rgba(99, 102, 241, 0.3) 0%, transparent 70%)',
-                                transform: 'translate(-50%, -50%)',
-                                pointerEvents: 'none'
-                            }}
-                        />
-                    ))}
-                </>
-            )}
-
-            {/* Subtle grid overlay */}
+            {/* Noise Overlay */}
             <div style={{
                 position: 'absolute',
                 top: 0,
                 left: 0,
                 right: 0,
                 bottom: 0,
-                backgroundImage: `
-                    linear-gradient(rgba(99, 102, 241, 0.03) 1px, transparent 1px),
-                    linear-gradient(90deg, rgba(99, 102, 241, 0.03) 1px, transparent 1px)
-                `,
-                backgroundSize: '50px 50px',
-                pointerEvents: 'none'
+                opacity: 0.03,
+                pointerEvents: 'none',
+                backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")`
             }} />
         </div>
     );

@@ -236,6 +236,25 @@ async def assess_compliance(
         
     return {"assessment_id": assessment.id, "results_count": len(results)}
 
+@app.get("/debug/namespaces")
+async def debug_namespaces():
+    """Diagnostic endpoint to check Pinecone namespaces."""
+    if not rag_engine.use_pinecone:
+        return {"error": "Pinecone is not enabled"}
+    
+    try:
+        from pinecone import Pinecone
+        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        index = pc.Index(rag_engine.index_name)
+        stats = index.describe_index_stats()
+        return {
+            "index_name": rag_engine.index_name,
+            "namespaces": stats.to_dict().get('namespaces', {}),
+            "total_vector_count": stats.get('total_vector_count', 0)
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/debug/vector-store")
 def debug_vector_store(session_id: str = Depends(get_sid)):
     info = {
@@ -260,8 +279,11 @@ async def chat_with_docs(
     use_kb: bool = Form(False),
     session_id: str = Depends(get_sid)
 ):
+    # Retrieve chat history
+    history = store.get_history(session_id)
+    
     # Search across documents with optional knowledge base
-    similar_docs = rag_engine.retrieve_similar_clauses(query, top_k=5, use_kb=use_kb, session_id=session_id)
+    similar_docs = rag_engine.retrieve_similar_clauses(query, top_k=15, use_kb=use_kb, session_id=session_id)
     
     if not similar_docs:
         return {"answer": "I couldn't find any relevant information in your documents. Please upload some documents first."}
@@ -275,16 +297,23 @@ async def chat_with_docs(
         doc_name = doc_obj.filename if doc_obj else d.metadata.get('doc_name', 'Unknown')
         clause_id = d.metadata.get('clause_id', 'N/A')
         page = d.metadata.get('page_number', 'N/A')
+        source_type = d.metadata.get('source_type', 'DOC')
+        
         context_parts.append(
-            f"REF [{i}]:\n"
+            f"REF [{source_type} {i}]:\n"
             f"File: {doc_name} | Clause: {clause_id} | Page: {page}\n"
             f"Content: {d.page_content}"
         )
     
     context = "\n\n---\n\n".join(context_parts)
     
-    # Use LLM to answer the question based on context
-    answer = rag_engine.answer_general_question(query, context)
+    # Use LLM to answer the question based on context and history
+    answer = rag_engine.answer_general_question(query, context, history=history)
+    
+    # Save to history
+    store.add_history_message(session_id, "user", query)
+    store.add_history_message(session_id, "bot", answer)
+    
     return {"answer": answer}
 
 @app.get("/graph/{assessment_id}")

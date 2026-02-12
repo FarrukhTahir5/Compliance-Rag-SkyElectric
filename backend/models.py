@@ -58,6 +58,7 @@ class SessionData:
     assessment_counter: int = 0
     result_counter: int = 0
     last_activity: datetime = field(default_factory=datetime.utcnow)
+    history: List[Dict] = field(default_factory=list)
 
 class InMemoryStore:
     """Thread-safe in-memory data store with multi-session support."""
@@ -199,6 +200,17 @@ class InMemoryStore:
         s = self.get_session(session_id)
         if assessment_id in s.assessments:
             del s.assessments[assessment_id]
+
+    # History operations
+    def add_history_message(self, session_id: str, role: str, content: str):
+        s = self.get_session(session_id)
+        s.history.append({"role": role, "content": content, "timestamp": datetime.utcnow().isoformat()})
+        # Keep only last 20 messages to avoid context bloat
+        if len(s.history) > 20:
+            s.history = s.history[-20:]
+
+    def get_history(self, session_id: str) -> List[Dict]:
+        return self.get_session(session_id).history
 
 
 # Global in-memory store instance

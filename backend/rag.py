@@ -23,7 +23,11 @@ class RAGEngine:
             model="models/gemini-embedding-001",
             output_dimensionality=768
         )
-        self.llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-lite", temperature=0)
+        self.llm = ChatGoogleGenerativeAI(
+            model="models/gemini-2.0-flash-lite", 
+            temperature=0,
+            max_output_tokens=4096  # Explicit high limit for long answer lists
+        )
         self.use_pinecone = USE_PINECONE
         self.index_name = os.getenv("PINECONE_INDEX_NAME", "compliance-rag")
         self.vector_store = None
@@ -108,45 +112,82 @@ class RAGEngine:
         else:
             self.vector_store = None
 
-    def retrieve_similar_clauses(self, query_text: str, top_k: int = 5, doc_id: int = None, use_kb: bool = False, session_id: str = None):
+    def reciprocal_rank_fusion(self, search_results_list: List[List[tuple]], k=60):
+        """
+        Reciprocal Rank Fusion (RRF) to merge results from different sources.
+        search_results_list: List of result lists, each result is (doc, score)
+        """
+        fused_scores = {}
+        for results in search_results_list:
+            for rank, (doc, _) in enumerate(results):
+                # Composite key: source_type + doc_name + clause_id
+                source_type = doc.metadata.get('source_type', 'UNKNOWN')
+                doc_name = doc.metadata.get('doc_name', 'Unknown')
+                clause_id = doc.metadata.get('clause_id', 'Unknown')
+                key = f"{source_type}_{doc_name}_{clause_id}"
+                
+                if key not in fused_scores:
+                    fused_scores[key] = (doc, 0)
+                
+                # RRF Formula: 1 / (k + rank + 1)
+                fused_scores[key] = (doc, fused_scores[key][1] + 1 / (k + rank + 1))
+        
+        # Sort by fused score descending
+        fused_results = sorted(fused_scores.values(), key=lambda x: x[1], reverse=True)
+        return fused_results
+
+    def retrieve_similar_clauses(self, query_text: str, top_k: int = 8, use_kb: bool = False, session_id: str = None, doc_id: int = None):
         if self.vector_store is None:
             return []
             
         session_ns = self.get_session_namespace(session_id) if session_id else "session"
-        namespaces = [session_ns]
-        if use_kb:
-            namespaces.append("permanent")
-            
-        all_results = []
+        
+        kb_results = []
+        doc_results = []
         
         if self.use_pinecone:
-            # Search across specified namespaces
-            for ns in namespaces:
+            # Search Session Store (Uploaded Docs)
+            try:
+                doc_results = self.vector_store.similarity_search_with_score(
+                    query_text, 
+                    k=top_k, 
+                    namespace=session_ns
+                )
+                # Label source for clarity
+                for d, s in doc_results: d.metadata["source_type"] = "DOC"
+            except Exception as e:
+                print(f"DEBUG: Pinecone session search error: {e}")
+                
+            # Search Knowledge Base (Permanent)
+            if use_kb:
                 try:
-                    results = self.vector_store.similarity_search_with_score(
+                    kb_results = self.vector_store.similarity_search_with_score(
                         query_text, 
-                        k=top_k * 2, 
-                        namespace=ns
+                        k=top_k, 
+                        namespace="permanent"
                     )
-                    all_results.extend(results)
+                    # Label source for clarity
+                    for d, s in kb_results: d.metadata["source_type"] = "KB"
                 except Exception as e:
-                    print(f"DEBUG: Pinecone search error in namespace {ns}: {e}")
-            
-            # Re-sort combined results by score (descending for similarity, but score is usually distance)
-            # Pinecone score in similarity_search_with_score is usually similarity (higher is better)
-            all_results.sort(key=lambda x: x[1], reverse=True)
+                    print(f"DEBUG: Pinecone KB search error: {e}")
         else:
-            # FAISS search
-            all_results = self.vector_store.similarity_search_with_score(query_text, k=top_k * 2)
-        
+            # FAISS fallback (no namespaces)
+            all_res = self.vector_store.similarity_search_with_score(query_text, k=top_k * 2)
+            for d, s in all_res: d.metadata["source_type"] = "FAISS"
+            return all_res[:top_k]
+
+        # Filter by doc_id if specified (usually for compliance assessment against a specific reg)
         if doc_id:
-            filtered_docs = [
-                (doc, score) for doc, score in all_results 
+            combined = doc_results + kb_results
+            filtered = [
+                (doc, score) for doc, score in combined 
                 if doc.metadata.get('doc_id') == str(doc_id)
             ]
-            return filtered_docs[:top_k]
-            
-        return all_results[:top_k]
+            return filtered[:top_k]
+
+        # Use RRF to fuse KB and Uploaded Doc results
+        fused = self.reciprocal_rank_fusion([kb_results, doc_results])
+        return fused[:top_k]
 
     async def analyze_compliance(self, customer_clause: str, regulation_context: str):
         prompt = ChatPromptTemplate.from_messages([
@@ -215,21 +256,51 @@ class RAGEngine:
                 "confidence": 0.0
             }
 
-    def answer_general_question(self, query: str, context: str):
+    def answer_general_question(self, query: str, context: str, history: List[Dict] = None):
+        history_str = ""
+        if history:
+            history_str = "\n".join([f"{m['role']}: {m['content']}" for m in history])
+
         prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a helpful compliance assistant with multilingual capabilities. 
-            Answer the user's question accurately based ON THE PROVIDED document context.
+            ("system", """You are a helpful compliance assistant for SkyElectric.
             
-            CITATION STYLE (IMPORTANT):
-            1. Use numerical citations in your text, e.g., "The network must support 10kV [1]."
-            2. At the very end of your response, list your sources in a "SOURCES" section.
-            3. Each source should look like: "[1] File: filename.pdf | Clause: A.1 | Page: 5"
-            4. This keeps the main response clean while providing full traceability at the bottom.
+            TASK 1: INTENT DETECTION
+            - If the user says "hi", "hello", or general greetings, respond with a BRIEF, friendly greeting. 
+            - If the user asks a question, PROVIDE DIRECT ANSWERS IMMEDIATELY.
+
+            STRICT CONSTRAINT:
+            - NEVER say "I will proceed to answer", "I will now answer", or similar planning phrases.
+            - NEVER list the questions without providing their answers in the SAME message.
+
+            INSTRUCTIONS FOR BALANCING KNOWLEDGE:
+            1. **Internal Knowledge**: You are an expert in engineering, compliance, and regulatory standards. Use your extensive internal training data to provide context, explain general concepts, and answer industry-standard questions.
+            2. **Document Context**: Use the provided Uploaded Documents ([DOC]) or Knowledge Base ([KB]) primarily for project-specific data, unique site details, and verifying specific clauses from the user's files.
+            3. **Citation Strategy**: 
+               - If an answer is derived from the provided context (DOC or KB), cite it using [DOC n] or [KB n].
+               - If an answer is general industry knowledge not found in the documents, you do not need to cite a document, but you should mention your general expertise.
+            4. **Conversational Tone**: Sound like a professional collaborator. Avoid making it look like you *only* know what is in the provided snippets.
+
+            CITATION & SOURCE UNIFICATION (UNIFY DUPLICATE IDS):
+            - Assign ONE UNIQUE index per UNIQUE (File + Clause) pair. 
+            - If you use content from a specific file/clause multiple times, it MUST use the same [DOC n] or [KB n] index throughout the response.
+            - NEVER assign different indices to the same document filename.
             
-            MULTILINGUAL RULES:
-            1. If the document context is in a language other than the user's query, translate the relevant information automatically.
-            2. Even if the context is technical (numbers, section titles), explain what those sections represent.
-            3. NEVER say "no information available in English" if there is information in ANY language. Translate it!
+            RESPONSE FORMAT (MANDATORY):
+            1. Lead with the primary answer(s).
+            2. Use a numbered list for multiple answers.
+               - (Optional) Start with a brief phrase like "Based on my general knowledge and the uploaded documents..." if appropriate, but never a generic placeholder.
+            3. Use **bold** for key terms.
+            4. **MANDATORY SOURCES SECTION (ONLY IF CITED):**
+               - At the very end, include the SOURCES section ONLY IF you used content from [DOC n] or [KB n] in your response.
+               - IF NO CITATIONS ARE USED, DO NOT INCLUDE THE "SOURCES:" HEADER OR SECTION AT ALL.
+            
+            SOURCES SECTION FORMAT (IF APPLICABLE):
+            SOURCES:
+            - [Source Type] File: filename | Clause: ID | Page: #
+            (List each unique filename/clause combo ONCE only)
+            
+            Conversation History:
+            {history}
             
             Context:
             {context}"""),
@@ -237,7 +308,7 @@ class RAGEngine:
         ])
         
         chain = prompt | self.llm
-        res = chain.invoke({"query": query, "context": context})
+        res = chain.invoke({"query": query, "context": context, "history": history_str})
         return res.content
 
 

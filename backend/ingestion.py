@@ -144,6 +144,21 @@ def parse_docx(file_content: bytes, filename: str) -> List[Dict]:
     return clauses
 
 
+def chunk_text(text: str, chunk_size: int = 2000, chunk_overlap: int = 400) -> List[str]:
+    """Simple character-based chunking as a proxy for token-based chunking."""
+    if not text:
+        return []
+    
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+        start += chunk_size - chunk_overlap
+        
+    return chunks
+
+
 def parse_document(file_content: bytes, filename: str, file_type: str, version: str = "1.0", namespace: str = None, session_id: str = None) -> int:
     """
     Parse a document (PDF, DOCX, or XLSX) and store in memory.
@@ -152,21 +167,24 @@ def parse_document(file_content: bytes, filename: str, file_type: str, version: 
     # Determine file type and parse
     filename_lower = filename.lower()
     
+    raw_clauses = []
     if filename_lower.endswith('.pdf'):
-        clauses = parse_pdf(file_content, filename)
+        raw_clauses = parse_pdf(file_content, filename)
     elif filename_lower.endswith('.docx'):
-        clauses = parse_docx(file_content, filename)
+        raw_clauses = parse_docx(file_content, filename)
     elif filename_lower.endswith('.xlsx'):
-        clauses = parse_xlsx(file_content, filename)
+        raw_clauses = parse_xlsx(file_content, filename)
     else:
         raise ValueError(f"Unsupported file type: {filename}")
     
     # Add document to in-memory store
     doc = store.add_document(session_id=session_id, filename=filename, file_type=file_type, version=version)
     
-    # Add clauses to store and prepare for vector ingestion
     ingest_clauses = []
-    for c in clauses:
+    
+    # Process structured clauses if found, or chunk the whole thing if not
+    for c in raw_clauses:
+        # Add to structured store
         store.add_clause(
             session_id=session_id,
             document_id=doc.id,
@@ -175,17 +193,28 @@ def parse_document(file_content: bytes, filename: str, file_type: str, version: 
             page_number=c['page_number'],
             severity=c['severity']
         )
-        ingest_clauses.append({
-            "status": "INGESTED", # Temporary placeholder
-            "clause_id": c['clause_id'],
-            "doc_id": doc.id,
-            "doc_name": filename,  # Include filename for chat responses
-            "text": c['text'],
-            "page_number": c['page_number']
-        })
+        
+        # If clause text is very long, we further chunk it for vector store compatibility
+        if len(c['text']) > 2500:
+            sub_chunks = chunk_text(c['text'])
+            for i, sub_text in enumerate(sub_chunks):
+                ingest_clauses.append({
+                    "clause_id": f"{c['clause_id']}-part{i+1}",
+                    "doc_id": doc.id,
+                    "doc_name": filename,
+                    "text": sub_text,
+                    "page_number": c['page_number']
+                })
+        else:
+            ingest_clauses.append({
+                "clause_id": c['clause_id'],
+                "doc_id": doc.id,
+                "doc_name": filename,
+                "text": c['text'],
+                "page_number": c['page_number']
+            })
     
-    # Ingest all documents into Vector DB (not just regulations)
-    # This enables chatting with any uploaded document
+    # Ingest into Vector DB
     if ingest_clauses:
         rag_engine.ingest_documents(ingest_clauses, session_id=session_id, namespace=namespace)
     

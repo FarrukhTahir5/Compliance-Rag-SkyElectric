@@ -66,20 +66,25 @@ function App() {
   };
 
   return (
-    <div style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden', background: '#f9fafb' }}>
-
-
-      <main style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
-
-
-        <div style={{ flex: 1, position: 'relative' }}>
-          <div style={{ width: '100%', height: '100%', padding: '40px', display: 'flex', justifyContent: 'center' }}>
-            <ChatDialog isFullScreen={true} useKb={useKb} />
-          </div>
+    <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', background: '#020617' }}>
+      <main style={{ width: '100%', height: '100%', position: 'relative' }}>
+        <div style={{ width: '100%', height: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+          <ChatDialog isFullScreen={true} useKb={useKb} />
         </div>
       </main>
 
       <style>{`
+        * {
+          box-sizing: border-box;
+          margin: 0;
+          padding: 0;
+        }
+        body, html {
+          width: 100%;
+          height: 100%;
+          overflow: hidden;
+          background: #020617;
+        }
         @keyframes spin {
           to { transform: rotate(360deg); }
         }
