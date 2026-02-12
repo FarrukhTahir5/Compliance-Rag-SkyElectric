@@ -215,7 +215,19 @@ class RAGEngine:
                 "confidence": 0.0
             }
 
-    def answer_general_question(self, query: str, context: str, context_description: str = "the provided documents"):
+    def answer_general_question(self, query: str, context: str, context_description: str = "the provided documents", conversation_history: List[Dict] = None):
+        # Build conversation history context if available
+        history_context = ""
+        if conversation_history and len(conversation_history) > 0:
+            # Filter out system messages and format the history
+            relevant_history = [msg for msg in conversation_history if msg.get('role') in ['user', 'bot']]
+            if relevant_history:
+                history_context = "\n\nCONVERSATION HISTORY:\n"
+                for msg in relevant_history[-10:]:  # Only include last 10 messages to avoid token limits
+                    role = "User" if msg.get('role') == 'user' else "Assistant"
+                    history_context += f"{role}: {msg.get('content', '')}\n"
+                history_context += "\nCurrent question refers to this conversation history. Use it to provide contextual answers.\n"
+
         prompt = ChatPromptTemplate.from_messages([
             ("system", f"""You are a helpful compliance assistant with expert knowledge across multiple documents. 
             Answer the user's question accurately based on the provided context from {context_description}.
@@ -228,6 +240,11 @@ class RAGEngine:
               2. Highlight agreements, differences, or complementary details
               3. Provide verification by citing relevant knowledge base standards/regulations
               4. Give comprehensive answers that leverage both perspectives
+            
+            CONVERSATION CONTEXT:
+            - You have access to the conversation history - use it to understand references to previous messages
+            - When asked about "my first message" or "previous questions", refer to the conversation history
+            - Provide continuity by referencing earlier parts of the conversation when relevant
             
             CROSS-REFERENCING APPROACH:
             - If the user asks "Can you verify this?" - compare their document against knowledge base standards
@@ -243,6 +260,8 @@ class RAGEngine:
             MULTILINGUAL RULES:
             1. If documents are in different languages, translate and cross-reference appropriately
             2. Always provide comprehensive answers regardless of source language
+            
+            {history_context}
             
             Context from {context_description}:
             {{context}}"""),

@@ -2,10 +2,25 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Upload, FileText, CheckCircle, AlertTriangle, XCircle, Info, Database, Download, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import ChatHistory from './ChatHistory';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
-const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeClick, assessmentId, mode, useKb }) => {
+const Sidebar = ({ 
+    onAssessmentComplete, 
+    selectedNode, 
+    onStartAnalysis, 
+    onNodeClick, 
+    assessmentId, 
+    mode, 
+    useKb,
+    // Chat history props
+    chatHistory,
+    activeChatId,
+    onSelectChat,
+    onNewChat,
+    onDeleteChat
+}) => {
     const [files, setFiles] = useState([]);
     const [uploading, setUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
@@ -191,6 +206,14 @@ const Sidebar = ({ onAssessmentComplete, selectedNode, onStartAnalysis, onNodeCl
                 SkyEngineering
             </h1>
             <p style={{ fontSize: '12px', opacity: 0.5, marginBottom: '24px' }}>Advanced Engineering Intelligence</p>
+
+            <ChatHistory 
+                history={chatHistory}
+                activeChatId={activeChatId}
+                onSelectChat={onSelectChat}
+                onNewChat={onNewChat}
+                onDeleteChat={onDeleteChat}
+            />
 
             <section style={{ marginBottom: '32px' }}>
                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', textTransform: 'uppercase', opacity: 0.6 }}>

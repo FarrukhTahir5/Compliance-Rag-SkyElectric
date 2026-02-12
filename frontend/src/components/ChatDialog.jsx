@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { MessageSquare, Send, X, Bot, User, Maximize2, Minimize2, Zap, Shield, Globe, Upload, File, Trash2 } from 'lucide-react';
+import { MessageSquare, Send, X, Bot, User, Maximize2, Minimize2, Zap, Shield, Globe, Upload, File, Trash2, PlusSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import logo from '../assets/cleanlogo.png';
@@ -8,9 +8,14 @@ import ReactiveBackground from './ReactiveBackground';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
-const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
+const ChatDialog = ({ 
+    isFullScreen = false, 
+    useKb = false, 
+    messages = [], 
+    onSendMessage,
+    onNewChat
+}) => {
     const [isOpen, setIsOpen] = useState(false);
-    const [messages, setMessages] = useState([]);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
     const [animationState, setAnimationState] = useState('idle');
@@ -39,7 +44,16 @@ const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
         const file = event.target.files[0];
         if (!file) return;
 
-        // Check file type
+        // Check if a chat is active. You can't upload a file to a non-existent chat.
+        if (messages.length === 0) {
+            onSendMessage({
+                role: 'system',
+                content: 'Please start the conversation before uploading a file.',
+                timestamp: new Date()
+            });
+            return;
+        }
+
         const allowedTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
         if (!allowedTypes.includes(file.type)) {
             alert('Please upload only PDF or DOCX files.');
@@ -63,19 +77,19 @@ const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
                 type: file.type
             });
 
-            setMessages(prev => [...prev, {
+            onSendMessage({
                 role: 'system',
                 content: `📄 Document "${file.name}" uploaded successfully! Now I will ALWAYS use both your document AND the knowledge base together to provide comprehensive, cross-referenced answers. Ask me anything!`,
                 timestamp: new Date()
-            }]);
+            });
 
         } catch (error) {
             console.error('Upload error:', error);
-            setMessages(prev => [...prev, {
+            onSendMessage({
                 role: 'system',
                 content: `❌ Failed to upload "${file.name}". Please try again.`,
                 timestamp: new Date()
-            }]);
+            });
         } finally {
             setUploadLoading(false);
         }
@@ -83,37 +97,56 @@ const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
 
     const handleRemoveFile = () => {
         setUploadedFile(null);
-        setMessages(prev => [...prev, {
+        onSendMessage({
             role: 'system',
             content: `📄 Document removed from session. Questions will now only use the knowledge base.`,
             timestamp: new Date()
-        }]);
+        });
     };
 
     const handleSend = async () => {
         if (!input.trim() || loading) return;
 
-        const userMsg = { role: 'user', content: input, timestamp: new Date() };
-        setMessages(prev => [...prev, userMsg]);
+        const userInput = input;
+        const userMsg = { role: 'user', content: userInput, timestamp: new Date() };
+        
         setInput('');
         setLoading(true);
         setAnimationState('thinking');
 
+        // This is the crucial part. We get the chatId from the first message send.
+        // If it's a new chat, a new ID is created and returned by onSendMessage.
+        // If it's an existing chat, the existing active ID is used and returned.
+        const chatId = onSendMessage(userMsg);
+        
+        // We construct the history for the backend *before* the API call.
+        // This includes the message history from props, plus the new user message.
+        const historyForBackend = [...messages, userMsg];
+
         try {
             const formData = new FormData();
-            formData.append('query', input);
-            // Always use KB when file is uploaded for comprehensive answers
+            formData.append('query', userInput);
             formData.append('use_kb', uploadedFile ? 'true' : (useKb ? 'true' : 'false'));
             formData.append('has_session_file', uploadedFile ? 'true' : 'false');
+            
+            // Pass the history, including the latest user message.
+            formData.append('history', JSON.stringify(historyForBackend));
+
             const res = await axios.post(`${API_BASE}/chat`, formData);
 
             setAnimationState('response');
-            setMessages(prev => [...prev, { role: 'bot', content: res.data.answer, timestamp: new Date() }]);
-            // Reset to idle after response animation
+            const botMsg = { role: 'bot', content: res.data.answer, timestamp: new Date() };
+            
+            // Use the stable chatId to send the bot's response.
+            onSendMessage(botMsg, chatId);
+
             setTimeout(() => setAnimationState('idle'), 2000);
         } catch (e) {
             setAnimationState('idle');
-            setMessages(prev => [...prev, { role: 'bot', content: "Failed to connect to the AI analyst. Is the backend running?", timestamp: new Date() }]);
+            const errorMsg = { role: 'bot', content: "Failed to connect to the AI analyst. Is the backend running?", timestamp: new Date() };
+            
+            // Use the stable chatId for the error message too.
+            onSendMessage(errorMsg, chatId);
         } finally {
             setLoading(false);
         }
@@ -175,11 +208,18 @@ const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
                         SkyEngineering AI
                     </span>
                 </div>
-                {!isFullScreen && (
-                    <button onClick={() => setIsOpen(false)} style={{ background: 'transparent', border: 'none', color: '#6b7280', cursor: 'pointer' }}>
-                        <X size={20} />
-                    </button>
-                )}
+                <div style={{display: 'flex', alignItems: 'center', gap: '10px'}}>
+                    {isFullScreen && (
+                         <button onClick={onNewChat} title="Start New Chat" style={{ background: 'transparent', border: 'none', color: '#6b7280', cursor: 'pointer' }}>
+                            <PlusSquare size={20} />
+                        </button>
+                    )}
+                    {!isFullScreen && (
+                        <button onClick={() => setIsOpen(false)} style={{ background: 'transparent', border: 'none', color: '#6b7280', cursor: 'pointer' }}>
+                            <X size={20} />
+                        </button>
+                    )}
+                </div>
 
             </div>
 
@@ -311,20 +351,21 @@ const ChatDialog = ({ isFullScreen = false, useKb = false }) => {
                                 />
                                 <button
                                     onClick={() => fileInputRef.current?.click()}
-                                    disabled={uploadLoading}
+                                    disabled={uploadLoading || messages.length === 0}
                                     style={{
                                         display: 'flex',
                                         alignItems: 'center',
                                         gap: '8px',
                                         padding: '8px 16px',
-                                        background: uploadLoading ? '#e5e7eb' : '#f3f4f6',
+                                        background: uploadLoading || messages.length === 0 ? '#e5e7eb' : '#f3f4f6',
                                         border: '1px solid #d1d5db',
                                         borderRadius: '8px',
-                                        cursor: uploadLoading ? 'not-allowed' : 'pointer',
+                                        cursor: uploadLoading || messages.length === 0 ? 'not-allowed' : 'pointer',
                                         fontSize: '14px',
                                         color: '#374151',
                                         transition: 'all 0.2s'
                                     }}
+                                    title={messages.length === 0 ? "Start a chat before uploading a file" : "Upload PDF/DOCX"}
                                 >
                                     <Upload size={16} />
                                     {uploadLoading ? 'Uploading...' : 'Upload PDF/DOCX'}

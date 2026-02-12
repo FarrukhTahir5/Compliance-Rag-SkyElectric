@@ -14,6 +14,7 @@ from reportlab.lib import colors
 import io
 import os
 import asyncio
+import json
 from datetime import datetime, timedelta
 from fastapi.responses import FileResponse
 import shutil
@@ -302,6 +303,7 @@ async def chat_with_docs(
     query: str = Form(...),
     use_kb: bool = Form(False),
     has_session_file: str = Form("false"),
+    history: str = Form("[]"),
     session_id: str = Depends(get_sid)
 ):
     """
@@ -309,6 +311,14 @@ async def chat_with_docs(
     When a file is uploaded, ALWAYS search both sources to provide comprehensive answers.
     """
     print(f"DEBUG: Chat query='{query}', use_kb={use_kb}, has_session_file={has_session_file}, session={session_id}")
+    
+    # Parse conversation history
+    try:
+        conversation_history = json.loads(history) if history and history != "[]" else []
+        print(f"DEBUG: Parsed {len(conversation_history)} messages from history")
+    except json.JSONDecodeError:
+        print("DEBUG: Failed to parse history, using empty list")
+        conversation_history = []
     
     search_session = has_session_file.lower() == "true"
     
@@ -413,8 +423,8 @@ async def chat_with_docs(
     # Enhanced context for LLM
     enhanced_context = f"{answer_instruction}\n\n{context}"
     
-    # Generate answer using both sources
-    answer = rag_engine.answer_general_question(query, enhanced_context, context_description)
+    # Generate answer using both sources and conversation history
+    answer = rag_engine.answer_general_question(query, enhanced_context, context_description, conversation_history)
     
     return {"answer": answer}
 
