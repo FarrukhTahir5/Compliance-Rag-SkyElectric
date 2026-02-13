@@ -15,31 +15,46 @@ function App() {
   const [useKb, setUseKb] = useState(true); // Enabled by default as requested
 
   // Chat History State
-  const [chatHistory, setChatHistory] = useState([]);
-  const [activeChatId, setActiveChatId] = useState(null);
-
-
-  // Load chat history from localStorage on initial render
-  useEffect(() => {
+  const [chatHistory, setChatHistory] = useState(() => {
     try {
-      const savedHistory = localStorage.getItem('chatHistory');
-      if (savedHistory) {
-        setChatHistory(JSON.parse(savedHistory));
-      }
+      const saved = localStorage.getItem('chatHistory');
+      return saved ? JSON.parse(saved) : [];
     } catch (error) {
-      console.error("Failed to load chat history from localStorage", error);
-      setChatHistory([]);
+      console.error("Error loading chat history from localStorage", error);
+      return [];
     }
-  }, []);
+  });
+
+  const [activeChatId, setActiveChatId] = useState(() => {
+    try {
+      return localStorage.getItem('activeChatId') || null;
+    } catch (error) {
+      console.error("Error loading active chat ID from localStorage", error);
+      return null;
+    }
+  });
+
+  // Validate activeChatId on initial load
+  useEffect(() => {
+    if (activeChatId && !chatHistory.some(chat => chat.id === activeChatId)) {
+      setActiveChatId(null);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run only on mount to validate initial state
 
   // Save chat history to localStorage whenever it changes
   useEffect(() => {
     try {
       localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
+      if (activeChatId) {
+        localStorage.setItem('activeChatId', activeChatId);
+      } else {
+        localStorage.removeItem('activeChatId');
+      }
     } catch (error) {
       console.error("Failed to save chat history to localStorage", error);
     }
-  }, [chatHistory]);
+  }, [chatHistory, activeChatId]);
 
 
   // Multi-session management
@@ -111,11 +126,8 @@ function App() {
   const handleSendMessage = (message, chatId) => {
     const currentChatId = chatId || activeChatId;
 
-    let newChatId = null;
-
-    setChatHistory(prev => {
-        if (currentChatId && prev.some(chat => chat.id === currentChatId)) {
-            // Add message to an existing chat and move it to the top
+    if (currentChatId) {
+        setChatHistory(prev => {
             const updatedHistory = prev.map(chat =>
                 chat.id === currentChatId
                     ? { ...chat, messages: [...chat.messages, message] }
@@ -123,16 +135,18 @@ function App() {
             );
             const currentChat = updatedHistory.find(chat => chat.id === currentChatId);
             const otherChats = updatedHistory.filter(chat => chat.id !== currentChatId);
+            // Ensure chat exists before moving it
+            if (!currentChat) return prev;
             return [currentChat, ...otherChats];
-        } else {
-            // Create a new chat
-            newChatId = crypto.randomUUID();
-            setActiveChatId(newChatId);
-            return [{ id: newChatId, messages: [message] }, ...prev];
-        }
-    });
-    
-    return newChatId || currentChatId;
+        });
+        return currentChatId;
+    } else {
+        // Create a new chat
+        const newChatId = crypto.randomUUID();
+        setChatHistory(prev => [{ id: newChatId, messages: [message] }, ...prev]);
+        setActiveChatId(newChatId);
+        return newChatId;
+    }
   };
 
   const activeChat = chatHistory.find(chat => chat.id === activeChatId);

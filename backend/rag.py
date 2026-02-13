@@ -270,8 +270,13 @@ class RAGEngine:
         
         chain = prompt | self.llm
         res = chain.invoke({"query": query, "context": context, "context_description": context_description})
-        return res.content
-
+        
+        # Return just the content - sources will be handled separately in main.py
+        return {
+            "answer": res.content.strip(),
+            "sources": []  # This will be overridden in main.py
+        }
+        print("DEBUG: RAG response:", res.content)
 
 # Global RAG instance
 rag_engine = RAGEngine()

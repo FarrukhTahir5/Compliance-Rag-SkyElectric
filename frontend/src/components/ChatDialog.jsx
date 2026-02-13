@@ -34,6 +34,217 @@ const ChatDialog = ({
         });
     };
 
+
+
+    const renderSources = (sources) => {
+        if (!sources || sources.length === 0) return null;
+
+        return (
+            <div
+                style={{
+                    marginTop: '10px',
+                    paddingTop: '10px',
+                    borderTop: '1px solid #e5e7eb'
+                }}
+            >
+                <div style={{
+                    fontWeight: 600,
+                    fontSize: '0.8em',
+                    marginBottom: '8px'
+                }}>
+                    Sources
+                </div>
+
+                {sources.map((src) => (
+                    <div
+                        key={src.id}
+                        style={{
+                            padding: '6px 8px',
+                            marginBottom: '6px',
+                            background: '#f9fafb',
+                            borderRadius: '6px',
+                            fontSize: '0.82em'
+                        }}
+                    >
+                        <strong>[{src.id}]</strong> {src.title}  
+                        {src.clause && <> | Clause: {src.clause}</>}  
+                        {src.page && <> | Page: {src.page}</>}
+                    </div>
+                ))}
+            </div>
+        );
+    };
+////////////
+    const renderMessage = (content, role, sources = []) => {
+        if (!content) return null;
+
+        const parts = content.split(/SOURCES:/i);
+        const mainText = parts[0];
+        const sourcesText = parts[1];
+
+        const applyInlineFormatting = (text) => {
+            const regex = /(\*\*(.*?)\*\*|`(.*?)`|\[(KB|DOC)\s+\d+\])/g;
+            const segments = [];
+            let lastIndex = 0;
+            let match;
+
+            while ((match = regex.exec(text)) !== null) {
+                if (match.index > lastIndex) {
+                    segments.push(text.substring(lastIndex, match.index));
+                }
+
+                if (match[2]) {
+                    segments.push(
+                        <strong key={match.index}>{match[2]}</strong>
+                    );
+                } else if (match[3]) {
+                    segments.push(
+                        <code
+                            key={match.index}
+                            style={{
+                                background: role === 'user' ? 'rgba(255,255,255,0.2)' : '#e5e7eb',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                fontSize: '0.85em'
+                            }}
+                        >
+                            {match[3]}
+                        </code>
+                    );
+                } else if (match[4]) {
+                    const isKB = match[4] === 'KB';
+                    segments.push(
+                        <span
+                            key={match.index}
+                            style={{
+                                background: isKB ? '#eef2ff' : '#ecfdf5',
+                                color: isKB ? '#6366f1' : '#059669',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                fontSize: '0.75em',
+                                fontWeight: 600
+                            }}
+                        >
+                            {match[0]}
+                        </span>
+                    );
+                }
+
+                lastIndex = regex.lastIndex;
+            }
+
+            if (lastIndex < text.length) {
+                segments.push(text.substring(lastIndex));
+            }
+
+            return segments;
+        };
+
+        const formatText = (text) => {
+            const lines = text.split('\n');
+            const elements = [];
+            let i = 0;
+
+            while (i < lines.length) {
+                const line = lines[i];
+
+                if (line.match(/^#{1,3}\s+/)) {
+                    const level = line.match(/^(#+)/)[1].length;
+                    const headerText = line.replace(/^#+\s+/, '');
+                    elements.push(
+                        <div
+                            key={i}
+                            style={{
+                                fontWeight: 700,
+                                fontSize: level === 1 ? '1.2em' : level === 2 ? '1.1em' : '1em',
+                                marginTop: '10px',
+                                marginBottom: '6px'
+                            }}
+                        >
+                            {applyInlineFormatting(headerText)}
+                        </div>
+                    );
+                    i++;
+                    continue;
+                }
+
+                if (line.match(/^\d+\.\s+/)) {
+                    const listItems = [];
+                    while (i < lines.length && lines[i].match(/^\d+\.\s+/)) {
+                        const itemText = lines[i].replace(/^\d+\.\s+/, '');
+                        listItems.push(
+                            <li key={i}>{applyInlineFormatting(itemText)}</li>
+                        );
+                        i++;
+                    }
+
+                    elements.push(
+                        <ol key={`ol-${i}`} style={{ paddingLeft: '20px' }}>
+                            {listItems}
+                        </ol>
+                    );
+                    continue;
+                }
+
+                if (line.match(/^[-*]\s+/)) {
+                    const listItems = [];
+                    while (i < lines.length && lines[i].match(/^[-*]\s+/)) {
+                        const itemText = lines[i].replace(/^[-*]\s+/, '');
+                        listItems.push(
+                            <li key={i}>{applyInlineFormatting(itemText)}</li>
+                        );
+                        i++;
+                    }
+
+                    elements.push(
+                        <ul key={`ul-${i}`} style={{ paddingLeft: '20px' }}>
+                            {listItems}
+                        </ul>
+                    );
+                    continue;
+                }
+
+                if (line.trim()) {
+                    elements.push(
+                        <div key={i} style={{ marginBottom: '4px' }}>
+                            {applyInlineFormatting(line)}
+                        </div>
+                    );
+                }
+
+                i++;
+            }
+
+            return elements;
+        };
+
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {formatText(mainText)}
+                {renderSources(sources)}
+
+                {sourcesText && (
+                    <div
+                        style={{
+                            marginTop: '8px',
+                            paddingTop: '8px',
+                            borderTop: '1px solid #e5e7eb'
+                        }}
+                    >
+                        <div style={{ fontWeight: 600, fontSize: '0.8em', marginBottom: '6px' }}>
+                            Sources
+                        </div>
+                        {sourcesText.split('\n').map((s, idx) => (
+                            <div key={idx} style={{ fontSize: '0.8em', color: '#6b7280' }}>
+                                {s}
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        );
+    };
+///////////////
     useEffect(() => {
         if (scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -45,14 +256,14 @@ const ChatDialog = ({
         if (!file) return;
 
         // Check if a chat is active. You can't upload a file to a non-existent chat.
-        if (messages.length === 0) {
-            onSendMessage({
-                role: 'system',
-                content: 'Please start the conversation before uploading a file.',
-                timestamp: new Date()
-            });
-            return;
-        }
+        // if (messages.length === 0) {
+        //     onSendMessage({
+        //         role: 'system',
+        //         content: 'Please start the conversation before uploading a file.',
+        //         timestamp: new Date()
+        //     });
+        //     return;
+        // }
 
         const allowedTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
         if (!allowedTypes.includes(file.type)) {
@@ -135,8 +346,8 @@ const ChatDialog = ({
             const res = await axios.post(`${API_BASE}/chat`, formData);
 
             setAnimationState('response');
-            const botMsg = { role: 'bot', content: res.data.answer, timestamp: new Date() };
-            
+            const botMsg = { role: 'bot', content: res.data.answer, sources: res.data.sources || [], timestamp: new Date() };
+            //
             // Use the stable chatId to send the bot's response.
             onSendMessage(botMsg, chatId);
 
@@ -312,7 +523,10 @@ const ChatDialog = ({
                             textAlign: m.role === 'system' ? 'center' : 'left',
                             border: m.role === 'system' ? '1px solid #bae6fd' : 'none'
                         }}>
-                            {m.content}
+                            {/* {m.content} */}
+                            {m.role === 'bot'
+    ? renderMessage(m.content, m.role , m.sources)
+    : m.content}
                         </div>
                         {m.timestamp && m.role !== 'system' && (
                             <div style={{
@@ -351,21 +565,21 @@ const ChatDialog = ({
                                 />
                                 <button
                                     onClick={() => fileInputRef.current?.click()}
-                                    disabled={uploadLoading || messages.length === 0}
+                                    disabled={uploadLoading}
                                     style={{
                                         display: 'flex',
                                         alignItems: 'center',
                                         gap: '8px',
                                         padding: '8px 16px',
-                                        background: uploadLoading || messages.length === 0 ? '#e5e7eb' : '#f3f4f6',
+                                        background: uploadLoading ? '#e5e7eb' : '#f3f4f6',
                                         border: '1px solid #d1d5db',
                                         borderRadius: '8px',
-                                        cursor: uploadLoading || messages.length === 0 ? 'not-allowed' : 'pointer',
+                                        cursor: uploadLoading ? 'not-allowed' : 'pointer',
                                         fontSize: '14px',
                                         color: '#374151',
                                         transition: 'all 0.2s'
                                     }}
-                                    title={messages.length === 0 ? "Start a chat before uploading a file" : "Upload PDF/DOCX"}
+                                    title="Upload PDF/DOCX"
                                 >
                                     <Upload size={16} />
                                     {uploadLoading ? 'Uploading...' : 'Upload PDF/DOCX'}

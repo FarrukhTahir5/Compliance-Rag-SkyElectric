@@ -376,8 +376,9 @@ async def chat_with_docs(
     all_results.sort(key=lambda x: x[1], reverse=True)
     top_results = all_results[:6]
     
-    # Build comprehensive context
+    # Build comprehensive context and sources metadata
     context_parts = []
+    sources_metadata = []
     session_refs = 0
     kb_refs = 0
     
@@ -404,6 +405,14 @@ async def chat_with_docs(
             f"File: {doc_name} | Clause: {clause_id} | Page: {page} | Relevance: {score:.3f}\n"
             f"Content: {doc.page_content.strip()}"
         )
+        
+        # Build sources metadata for the response
+        sources_metadata.append({
+            "id": i,
+            "title": doc_name,
+            "clause": clause_id if clause_id != 'N/A' else None,
+            "page": int(page) if str(page).isdigit() else None
+        })
     
     context = "\n\n" + "="*50 + "\n\n".join(context_parts)
     
@@ -424,9 +433,19 @@ async def chat_with_docs(
     enhanced_context = f"{answer_instruction}\n\n{context}"
     
     # Generate answer using both sources and conversation history
-    answer = rag_engine.answer_general_question(query, enhanced_context, context_description, conversation_history)
+    result = rag_engine.answer_general_question(query, enhanced_context, context_description, conversation_history)
     
-    return {"answer": answer}
+    # Extract answer and use our sources metadata
+    if isinstance(result, dict):
+        answer = result.get("answer", "")
+        # Use the sources metadata we built instead of parsed sources
+        sources = sources_metadata
+    else:
+        # Fallback for backward compatibility
+        answer = str(result)
+        sources = sources_metadata
+    
+    return {"answer": answer, "sources": sources}
 
 @app.get("/graph/{assessment_id}")
 def get_graph_data(assessment_id: int, session_id: str = Depends(get_sid)):

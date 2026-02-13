@@ -215,7 +215,7 @@ const Sidebar = ({
                 onDeleteChat={onDeleteChat}
             />
 
-            <section style={{ marginBottom: '32px' }}>
+            {/* <section style={{ marginBottom: '32px' }}>
                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', textTransform: 'uppercase', opacity: 0.6 }}>
                     <Upload size={16} /> {isGraphMode ? "Knowledge Ingestion" : "Cloud Storage"}
                 </h3>
@@ -241,9 +241,9 @@ const Sidebar = ({
                         </div>
                     )}
                 </div>
-            </section>
+            </section> */}
 
-            <section style={{ marginBottom: '32px' }}>
+            {/* <section style={{ marginBottom: '32px' }}>
                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', textTransform: 'uppercase', opacity: 0.6 }}>
                     <Database size={16} /> Asset Library
                     {isGraphMode && selectedDocs.length > 0 && (
@@ -438,7 +438,7 @@ const Sidebar = ({
                         DOWNLOAD PDF REPORT
                     </button>
                 )}
-            </section>
+            </section> */}
 
             <AnimatePresence>
                 {isGraphMode && selectedNode && (
